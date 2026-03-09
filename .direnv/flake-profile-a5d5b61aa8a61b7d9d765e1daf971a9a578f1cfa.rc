@@ -39,13 +39,13 @@ NIX_CC='/nix/store/6hazq450ci6m382yq4ym8a6mbiv9mfsk-gcc-wrapper-15.2.0'
 export NIX_CC
 NIX_CC_WRAPPER_TARGET_HOST_aarch64_unknown_linux_gnu='1'
 export NIX_CC_WRAPPER_TARGET_HOST_aarch64_unknown_linux_gnu
-NIX_CFLAGS_COMPILE=' -frandom-seed=s3h7gws0z7 -isystem /nix/store/dmi3dkyzj86zh8p2km8bab805mq5g48d-openjdk-21.0.10+7/include -isystem /nix/store/4gpxl77j7ha1ysjfhid70bgy599cy8i5-perf-linux-6.19.6/include -isystem /nix/store/v0l23gj67haq78n2a4lz8b55bbnc0wrr-cpupower-6.18.16/include -isystem /nix/store/g1ysympimi4j469rnjd6j52i7vmwgzgl-s6-linux-utils-2.6.3.0-dev/include -isystem /nix/store/dmi3dkyzj86zh8p2km8bab805mq5g48d-openjdk-21.0.10+7/include -isystem /nix/store/4gpxl77j7ha1ysjfhid70bgy599cy8i5-perf-linux-6.19.6/include -isystem /nix/store/v0l23gj67haq78n2a4lz8b55bbnc0wrr-cpupower-6.18.16/include -isystem /nix/store/g1ysympimi4j469rnjd6j52i7vmwgzgl-s6-linux-utils-2.6.3.0-dev/include'
+NIX_CFLAGS_COMPILE=' -frandom-seed=sxaajj728r -isystem /nix/store/dmi3dkyzj86zh8p2km8bab805mq5g48d-openjdk-21.0.10+7/include -isystem /nix/store/4gpxl77j7ha1ysjfhid70bgy599cy8i5-perf-linux-6.19.6/include -isystem /nix/store/v0l23gj67haq78n2a4lz8b55bbnc0wrr-cpupower-6.18.16/include -isystem /nix/store/g1ysympimi4j469rnjd6j52i7vmwgzgl-s6-linux-utils-2.6.3.0-dev/include -isystem /nix/store/dmi3dkyzj86zh8p2km8bab805mq5g48d-openjdk-21.0.10+7/include -isystem /nix/store/4gpxl77j7ha1ysjfhid70bgy599cy8i5-perf-linux-6.19.6/include -isystem /nix/store/v0l23gj67haq78n2a4lz8b55bbnc0wrr-cpupower-6.18.16/include -isystem /nix/store/g1ysympimi4j469rnjd6j52i7vmwgzgl-s6-linux-utils-2.6.3.0-dev/include'
 export NIX_CFLAGS_COMPILE
 NIX_ENFORCE_NO_NATIVE='1'
 export NIX_ENFORCE_NO_NATIVE
 NIX_HARDENING_ENABLE='bindnow format fortify fortify3 libcxxhardeningextensive libcxxhardeningfast pic relro stackclashprotection stackprotector strictoverflow zerocallusedregs'
 export NIX_HARDENING_ENABLE
-NIX_LDFLAGS='-rpath /home/elias/research-project/outputs/out/lib  -L/nix/store/v0l23gj67haq78n2a4lz8b55bbnc0wrr-cpupower-6.18.16/lib -L/nix/store/v0l23gj67haq78n2a4lz8b55bbnc0wrr-cpupower-6.18.16/lib'
+NIX_LDFLAGS='-rpath /home/elias/ITU_research_2026/outputs/out/lib  -L/nix/store/v0l23gj67haq78n2a4lz8b55bbnc0wrr-cpupower-6.18.16/lib -L/nix/store/v0l23gj67haq78n2a4lz8b55bbnc0wrr-cpupower-6.18.16/lib'
 export NIX_LDFLAGS
 NIX_NO_SELF_RPATH='1'
 NIX_STORE='/nix/store'
@@ -139,7 +139,7 @@ name='nix-shell-env'
 export name
 nativeBuildInputs='/nix/store/dmi3dkyzj86zh8p2km8bab805mq5g48d-openjdk-21.0.10+7 /nix/store/r1pkjl21d6r0l5mxkakrnvbqvp82r66n-gradle-8.14.4 /nix/store/4gpxl77j7ha1ysjfhid70bgy599cy8i5-perf-linux-6.19.6 /nix/store/v0l23gj67haq78n2a4lz8b55bbnc0wrr-cpupower-6.18.16 /nix/store/g1ysympimi4j469rnjd6j52i7vmwgzgl-s6-linux-utils-2.6.3.0-dev'
 export nativeBuildInputs
-out='/home/elias/research-project/outputs/out'
+out='/home/elias/ITU_research_2026/outputs/out'
 export out
 outputBin='out'
 outputDev='out'
@@ -170,7 +170,7 @@ preConfigurePhases=' updateAutotoolsGnuConfigScriptsPhase'
 declare -a preFixupHooks=('_moveToShare' '_multioutDocs' '_multioutDevs' )
 preferLocalBuild='1'
 export preferLocalBuild
-prefix='/home/elias/research-project/outputs/out'
+prefix='/home/elias/ITU_research_2026/outputs/out'
 declare -a propagatedBuildDepFiles=('propagated-build-build-deps' 'propagated-native-build-inputs' 'propagated-build-target-deps' )
 propagatedBuildInputs=''
 export propagatedBuildInputs
@@ -180,8 +180,7 @@ export propagatedNativeBuildInputs
 declare -a propagatedTargetDepFiles=('propagated-target-target-deps' )
 shell='/nix/store/kysqfpylfpl8yrmgahj1sk6yrih918gl-bash-5.3p9/bin/bash'
 export shell
-shellHook='	    export PS1="\[\e[32m\][Bench-Marking-Shell]\[\e[0m\] $PS1"
-	  '
+shellHook=''
 export shellHook
 stdenv='/nix/store/dj83d1ypz8r00cdakqx4ildpkhf9a1ha-stdenv-linux'
 export stdenv
