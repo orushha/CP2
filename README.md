@@ -1,15 +1,30 @@
 # research_project_2026
 
-# NOTE: How to Run
+# Running Benchmarks
 
-```java
-# comment this in in build.gradle in order to run a quick benchmark test instead of the entire suite...
-includes = ['benchmarks.QuickBenchmark']
-
-# then run with this
-gradle jmh -Pjmh.threads=1
-# with variable thread counts ofc... included an AI-generated run_benchmarks.sh file for funsies...
+## Quick smoke test (~2 min)
+Runs a minimal subset to verify everything works on a new machine before committing to the full run:
+```sh
+bashgradle jmh -Pquick -Pjmh.threads=1
 ```
+
+## Full benchmark
+Runs all 8 implementations × 3 read/write ratios × 2 key ranges × 3 distributions (uniform, zipfian 0.5, zipfian 0.99).
+Results are saved to app/results/jmh-<timestamp>.csv.
+```sh
+bashgradle jmh -Pjmh.threads=1   # change thread count as needed
+```
+
+## Automated full run (all thread counts)
+Auto-detects hardware (RPi5 vs HPC) and runs the full benchmark for all appropriate thread counts.
+Runs smoke test first — aborts if anything is broken.
+```sh
+bash./run_benchmarks.sh           # full run
+./run_benchmarks.sh --quick       # smoke test only
+```
+
+RPi5 thread counts: 1, 2, 4, 8
+HPC thread counts: 1, 2, 4, 8, 16, 32, 64
 
 
 # Reproducible Benchmarking Environment
