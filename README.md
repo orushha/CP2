@@ -26,7 +26,6 @@ bash./run_benchmarks.sh           # full run
 RPi5 thread counts: 1, 2, 4, 8
 HPC thread counts: 1, 2, 4, 8, 16, 32, 64
 
-
 # Reproducible Benchmarking Environment
 
 This repository uses a `flake.nix` file to declaratively define the exact tools needed to build and benchmark this project. Anyone with the Nix package manager installed can reproduce the identical environment on any Linux machine — regardless of what is already installed on the system.
