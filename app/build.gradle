@@ -26,4 +26,5 @@ jmh {
     timeOnIteration = '2s'
     resultFormat = 'CSV'
     resultsFile = project.file("results/jmh-${new Date().format('yyyy-MM-dd_HH-mm-ss')}.csv")
+    includes = ['benchmarks.QuickBenchmark']   // comment this in for smoke test
 }

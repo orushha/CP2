@@ -3,12 +3,11 @@
 # NOTE: How to Run
 
 ```java
-# run only QuickBenchmark
-gradle jmh -Pjmh.threads=1 -Pjmh.include='benchmarks.QuickBenchmark'
+# comment this in in build.gradle in order to run a quick benchmark test instead of the entire suite...
+includes = ['benchmarks.QuickBenchmark']
 
-# run only the full benchmark
-gradle jmh -Pjmh.threads=1 -Pjmh.include='benchmarks.HashMapBenchmark'
-
+# then run with this
+gradle jmh -Pjmh.threads=1
 # with variable thread counts ofc... included an AI-generated run_benchmarks.sh file for funsies...
 ```
 
