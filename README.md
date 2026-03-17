@@ -1,5 +1,17 @@
 # research_project_2026
 
+# NOTE: How to Run
+
+```java
+# run only QuickBenchmark
+gradle jmh -Pjmh.threads=1 -Pjmh.include='benchmarks.QuickBenchmark'
+
+# run only the full benchmark
+gradle jmh -Pjmh.threads=1 -Pjmh.include='benchmarks.HashMapBenchmark'
+
+# with variable thread counts ofc... included an AI-generated run_benchmarks.sh file for funsies...
+```
+
 
 # Reproducible Benchmarking Environment
 
