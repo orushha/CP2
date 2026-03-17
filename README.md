@@ -1,5 +1,16 @@
 # research_project_2026
 
+# NOTE: How to Run
+
+```java
+# comment this in in build.gradle in order to run a quick benchmark test instead of the entire suite...
+includes = ['benchmarks.QuickBenchmark']
+
+# then run with this
+gradle jmh -Pjmh.threads=1
+# with variable thread counts ofc... included an AI-generated run_benchmarks.sh file for funsies...
+```
+
 
 # Reproducible Benchmarking Environment
 

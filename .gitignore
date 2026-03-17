@@ -246,3 +246,6 @@ result-*
 .direnv/
 
 # End of https://www.toptal.com/developers/gitignore/api/java,gradle,python,linux
+
+# Ignore Gradle build output directory
+build
