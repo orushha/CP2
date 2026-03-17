@@ -1,5 +1,3 @@
-# research_project_2026
-
 # Running Benchmarks
 
 ## Quick smoke test (~2 min)
