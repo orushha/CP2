@@ -26,9 +26,9 @@ bash./run_benchmarks.sh           # full run
 ./run_benchmarks.sh --quick       # smoke test only
 ```
 
-RPi5 thread counts: 1, 2, 4, 8
+**RPi5 thread counts: 1, 2, 4, 8**
 
-HPC thread counts: 1, 2, 4, 8, 16, 32, 64
+**HPC thread counts: 1, 2, 4, 8, 16, 32, 64**
 
 # Reproducible Benchmarking Environment
 
