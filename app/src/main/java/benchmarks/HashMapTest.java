@@ -5,6 +5,7 @@
 
 // Run with assertions enabled for sequential functional test of the maps:
 //   java -ea HashMapTest
+package benchmarks;
 
 import java.util.Random;
 

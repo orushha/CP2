@@ -2,6 +2,7 @@
 // implementations. All now perform bucket array reallocation internally. 
 
 // sestoft@itu.dk * Based on TestStripedMapSolution.java 2014-10-07, 2025-06-26
+package benchmarks;
 
 import java.util.Locale;
 import java.util.Random;

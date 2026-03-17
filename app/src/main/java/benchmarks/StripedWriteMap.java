@@ -1,3 +1,5 @@
+package benchmarks;
+
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.function.BiConsumer;
 
@@ -8,42 +10,33 @@ import java.util.function.BiConsumer;
 // all, only need visibility of writes, which is ensured through the
 // AtomicIntegerArray called sizes.
 
-// The bucketCount must be a multiple of lockCount, the number of
-// stripes.  This ensures that for a given hash h the stripe can be
-// computed independently of the number of buckets, because then
-// (h % bucketCount) % lockCount == h % lockCount
-// and also h % lockCount is invariant under doubling the number of
-// buckets in method reallocateBuckets.  So this also eliminates the
-// risk that we lock a stripe, only to have the relevant entry moved
-// to a different stripe by an intervening call to reallocateBuckets.
+// The bucketCount must be a multiple of the number lockCount of
+// stripes, so that h % lockCount == (h % bucketCount) % lockCount and
+// so that h % lockCount is invariant under doubling the number of
+// buckets in method reallocateBuckets.  Otherwise there is a risk of
+// locking a stripe, only to have the relevant entry moved to a
+// different stripe by an intervening call to reallocateBuckets.
 
-// This implementation differs from StripedWriteMap only by padding
-// the locks and sizes arrays (putting dummy elements between any two
-// useful elements) so as to avoid false sharing of cache lines.  This
-// simple trick improves performance for large thread counts, though
-// in 2025 mostly on the Apple Aarch64-based CPUs for some reason.
-
-public class StripedWriteMapPadded<K,V> implements OurMap<K,V> {
+public class StripedWriteMap<K,V> implements OurMap<K,V> {
   // Synchronization policy: writing to
   //   buckets[hash] is guarded by locks[hash % lockCount]
-  //   sizes[s]      is guarded by locks[s]
+  //   sizes[s] is guarded by locks[s]
   // Visibility of writes to reads is ensured by writes writing to
   // the stripe's size component (even if size does not change) and
   // reads reading from the stripe's size component.
   private volatile ItemNode<K,V>[] buckets;
   private final int lockCount;
   private final Object[] locks;
-  private final AtomicIntegerArray sizes;
-  private final static int padding = 16;
+  private final AtomicIntegerArray sizes;  
 
-  public StripedWriteMapPadded(int lockCount) {
+  public StripedWriteMap(int lockCount) {
     int bucketCount = lockCount; // Must be a multiple of lockCount
     this.lockCount = lockCount;
     this.buckets = makeBuckets(bucketCount);
-    this.locks = new Object[lockCount * padding];
-    this.sizes = new AtomicIntegerArray(lockCount * padding);
-    for (int s=0; s<lockCount * padding; s++) 
-      this.locks[s] = new Object(); // includes padding objects
+    this.locks = new Object[lockCount];
+    this.sizes = new AtomicIntegerArray(lockCount);
+    for (int s=0; s<lockCount; s++) 
+      this.locks[s] = new Object();
   }
 
   @SuppressWarnings("unchecked") 
@@ -63,7 +56,7 @@ public class StripedWriteMapPadded<K,V> implements OurMap<K,V> {
     final ItemNode<K,V>[] bs = buckets;
     final int h = getHash(k), s = h % lockCount, hash = h % bs.length;
     // The sizes access is necessary for visibility of bs elements
-    return sizes.get(s * padding) != 0 && ItemNode.search(bs[hash], k, null);
+    return sizes.get(s) != 0 && ItemNode.search(bs[hash], k, null);
   }
 
   // Return value v associated with key k, or null
@@ -72,7 +65,7 @@ public class StripedWriteMapPadded<K,V> implements OurMap<K,V> {
     final int h = getHash(k), s = h % lockCount, hash = h % bs.length;
     Holder<V> value = new Holder<V>();
     // The sizes access is necessary for visibility of bs elements
-    if (sizes.get(s * padding) != 0 && ItemNode.search(bs[hash], k, value)) 
+    if (sizes.get(s) != 0 && ItemNode.search(bs[hash], k, value)) 
       return value.get();
     else
       return null;
@@ -81,7 +74,7 @@ public class StripedWriteMapPadded<K,V> implements OurMap<K,V> {
   public int size() {
     int result = 0;
     for (int s=0; s<lockCount; s++) 
-      result += sizes.get(s * padding);
+      result += sizes.get(s);
     return result;
   }
 
@@ -95,14 +88,14 @@ public class StripedWriteMapPadded<K,V> implements OurMap<K,V> {
     final Holder<V> old = new Holder<V>();
     ItemNode<K,V>[] bs;
     int afterSize; 
-    synchronized (locks[s * padding]) {
+    synchronized (locks[s]) {
       bs = buckets;
       final int hash = h % bs.length;
       final ItemNode<K,V> node = bs[hash], 
         newNode = ItemNode.delete(node, k, old);
       bs[hash] = new ItemNode<K,V>(k, v, newNode);
       // Write for visibility; increment if k was not already in map
-      afterSize = sizes.addAndGet(s * padding, newNode == node ? 1 : 0);
+      afterSize = sizes.addAndGet(s, newNode == node ? 1 : 0);
     }
     if (afterSize * lockCount > bs.length)
       reallocateBuckets(bs);
@@ -112,7 +105,7 @@ public class StripedWriteMapPadded<K,V> implements OurMap<K,V> {
   // Remove and return the value at key k if any, else return null
   public V remove(K k) {
     final int h = getHash(k), s = h % lockCount;
-    synchronized (locks[s * padding]) {
+    synchronized (locks[s]) {
       final ItemNode<K,V>[] bs = buckets;
       final int hash = h % bs.length;
       final Holder<V> old = new Holder<V>();
@@ -120,7 +113,7 @@ public class StripedWriteMapPadded<K,V> implements OurMap<K,V> {
         newNode = ItemNode.delete(node, k, old);
       if (newNode != node) { // Removed something from node list, so update
         bs[hash] = newNode;
-        sizes.getAndDecrement(s * padding);   // Visibility
+        sizes.getAndDecrement(s);   // Visibility
       } 
       return old.get();
     }
@@ -130,7 +123,7 @@ public class StripedWriteMapPadded<K,V> implements OurMap<K,V> {
   public void forEach(BiConsumer<K,V> consumer) {
     final ItemNode<K,V>[] bs = buckets;
     for (int s=0; s<lockCount; s++) {
-      if (sizes.get(s * padding) != 0) // Visibility
+      if (sizes.get(s) != 0) // Visibility
         for (int hash=s; hash<bs.length; hash+=lockCount) {
           ItemNode<K,V> node = bs[hash];
           while (node != null) {
@@ -171,7 +164,7 @@ public class StripedWriteMapPadded<K,V> implements OurMap<K,V> {
 	    }
 	  }
 	  buckets = newBuckets; // Visibility: buckets field is volatile
-	} 
+	}      
       });
   }
   
@@ -184,7 +177,7 @@ public class StripedWriteMapPadded<K,V> implements OurMap<K,V> {
     if (nextStripe >= lockCount)
       action.run();
     else 
-      synchronized (locks[nextStripe * padding]) {
+      synchronized (locks[nextStripe]) {
         lockAllAndThen(nextStripe + 1, action);
       }
   }

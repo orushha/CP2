@@ -1,5 +1,6 @@
-// Thread-safe striped level (or 2D) write hash map
-// sestoft@itu.dk * 2025-05-22 
+// Thread-safe striped level (or 2D) write hash map with snapshot, experimental
+// sestoft@itu.dk * 2025-05-26
+package benchmarks;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
@@ -30,7 +31,14 @@ import java.util.function.BiConsumer;
 // but a Stripe object and either its size object or its buckets array
 // may be.  Hence might be worth padding the Stripe object with dummy fields. 
 
-public class StripedLevelWriteMap<K,V> implements OurMap<K,V> {
+// Since the bucket lists are immutable, a snapshot can be created by
+// copying each Stripe object, with its bucket array and size field,
+// one by one and creating a top-level array with references to the
+// new Stripe objects.  It is necessary to take each old stripe's lock
+// before copying, or else the old stripe's bucket array contents and
+// size field may be updated during copying. 
+
+public class StripedLevelSnapshotWriteMap<K,V> implements OurMap<K,V> {
   // Synchronization policy: writing to
   //   stripe.buckets[index] is guarded by intrinsic lock on stripe
   // Visibility of writes to reads is ensured by writes writing to
@@ -42,7 +50,6 @@ public class StripedLevelWriteMap<K,V> implements OurMap<K,V> {
   private static class Stripe<K,V> {
     private volatile ItemNode<K,V>[] buckets;
     private final AtomicInteger size;
-    //     public long dummy1, dummy2, dummy3, dummy4, dummy5, dummy6, dummy7, dummy8; // padding
 
     public Stripe(int stripeBucketCount) {
       this.buckets = makeBuckets(stripeBucketCount);
@@ -50,7 +57,7 @@ public class StripedLevelWriteMap<K,V> implements OurMap<K,V> {
     }
   }
   
-  public StripedLevelWriteMap(int lockCount) {
+  public StripedLevelSnapshotWriteMap(int lockCount) {
     int bucketCount = lockCount; // Must be a multiple of lockCount
     this.lockCount = lockCount;
     this.stripes = makeStripeArray(lockCount);
@@ -58,6 +65,11 @@ public class StripedLevelWriteMap<K,V> implements OurMap<K,V> {
       this.stripes[s] = new Stripe<K,V>(bucketCount / lockCount);
   }
 
+  private StripedLevelSnapshotWriteMap(Stripe<K,V>[] stripes, int lockCount) {
+    this.stripes = stripes;
+    this.lockCount = lockCount;
+  }
+  
   @SuppressWarnings("unchecked") 
   private static <K,V> ItemNode<K,V>[] makeBuckets(int size) {
     // Java's @$#@?!! type system requires "unsafe" cast here:
@@ -186,6 +198,23 @@ public class StripedLevelWriteMap<K,V> implements OurMap<K,V> {
     }
   }
 
+  // Experimental, untested 2025-05-26
+  
+  public StripedLevelSnapshotWriteMap<K,V> snapshot() {
+    final Stripe<K,V>[] newStripes = makeStripeArray(lockCount);
+    for (int s=0; s<lockCount; s++) {
+      Stripe<K,V> oldStripe = stripes[s];
+      synchronized (oldStripe) {
+	Stripe<K,V> newStripe = new Stripe<K,V>(oldStripe.buckets.length);
+	for (int index=0; index<oldStripe.buckets.length; index++)
+	  newStripe.buckets[index] = oldStripe.buckets[index];
+	newStripe.size.set(oldStripe.size.get());
+	newStripes[s] = newStripe;
+      }
+    }
+    return new StripedLevelSnapshotWriteMap<K,V>(newStripes, lockCount);
+  }
+  
   static class ItemNode<K,V> {
     private final K k;
     private final V v;

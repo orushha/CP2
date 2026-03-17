@@ -2,6 +2,7 @@
 // sestoft@itu.dk * 2025-06-26
 
 // Based on 2014 TestHashMapSolution.java
+package benchmarks;
 
 import java.util.function.BiConsumer;
 

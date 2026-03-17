@@ -11,6 +11,7 @@
 // In this version, bulk operators, iterators, Java interfaces etc
 // have been removed for simplicity and clarity, and implementation of
 // the OurMap<K,V> interface has been added.
+package benchmarks;
 
 import java.util.function.BiConsumer;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;

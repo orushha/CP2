@@ -1,5 +1,6 @@
 // Interface for hash map implementations
 // sestoft@itu.dk * 2014
+package benchmarks;
 
 import java.util.function.BiConsumer;
 

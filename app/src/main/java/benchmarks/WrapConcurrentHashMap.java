@@ -1,3 +1,5 @@
+package benchmarks;
+
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 
