@@ -44,6 +44,18 @@ echo "OS: $(uname -a)" >> "$SYSINFO_FILE"
 echo "Java: $(java -version 2>&1 | head -1)" >> "$SYSINFO_FILE"
 echo "# System info saved to $SYSINFO_FILE"
 
+# Smoke test first
+echo ""
+echo "# Running smoke test before full benchmark..."
+gradle jmh \
+    -Pjmh.threads=1 \
+    -Pjmh.include='benchmarks.QuickBenchmark' \
+    -Pjmh.resultFormat='CSV' \
+    -Pjmh.resultsFile="$RESULTS_DIR/quicktest-$TIMESTAMP.csv"
+
+echo "# Smoke test passed! Starting full benchmark..."
+echo ""
+
 # Run benchmarks
 for THREADS in "${THREAD_COUNTS[@]}"; do
     OUTPUT="$RESULTS_DIR/jmh-${TIMESTAMP}-threads${THREADS}.csv"

@@ -19,12 +19,17 @@ dependencies {
     testImplementation 'junit:junit:4.13.2'
 }
 
+def isQuick = project.hasProperty('quick')
+
 jmh {
-    fork = 2
-    warmupIterations = 5
-    iterations = 10
-    timeOnIteration = '2s'
+    fork = isQuick ? 1 : 2
+    warmupIterations = isQuick ? 1 : 5
+    iterations = isQuick ? 1 : 10
+    timeOnIteration = '1s'
     resultFormat = 'CSV'
-    resultsFile = project.file("results/jmh-${new Date().format('yyyy-MM-dd_HH-mm-ss')}.csv")
-    includes = ['benchmarks.QuickBenchmark']   // comment this in for smoke test
+    includes = [isQuick ? 'benchmarks.QuickBenchmark' : 'benchmarks.HashMapBenchmark']
+
+    if (!isQuick) {
+        resultsFile = project.file("results/jmh-${new Date().format('yyyy-MM-dd_HH-mm-ss')}.csv")
+    }
 }

@@ -8,14 +8,14 @@ import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Quick smoke test benchmark... uns in ~5 minutes.
+ * Quick smoke test benchmark — runs in ~5 minutes.
  * Use this to verify everything works on a new machine before
  * committing to the full HashMapBenchmark run.
  */
 @BenchmarkMode({Mode.Throughput, Mode.AverageTime})
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
-@Warmup(iterations = 2, time = 1)
-@Measurement(iterations = 3, time = 1)
+@Warmup(iterations = 1, time = 1)
+@Measurement(iterations = 2, time = 1)
 @Fork(1)
 @State(Scope.Benchmark)
 public class QuickBenchmark {
