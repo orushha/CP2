@@ -5,9 +5,5 @@
  * For more detailed information on multi-project builds, please refer to https://docs.gradle.org/8.14.4/userguide/multi_project_builds.html in the Gradle documentation.
  */
 
-plugins {
-    id 'me.champeau.jmh' version '0.7.2' apply false
-}
-
 rootProject.name = 'ITU_research_2026'
 include('app')
