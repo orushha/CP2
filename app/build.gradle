@@ -12,6 +12,7 @@ java {
 }
 
 repositories {
+    maven { url uri('../local-plugin-repo') }
     mavenCentral()
 }
 
