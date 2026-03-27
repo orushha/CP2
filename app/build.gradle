@@ -27,12 +27,6 @@ def isQuick = project.hasProperty('quick')
 def hostname = InetAddress.localHost.hostName
 def timestamp = new Date().format('yyyy-dd-MM_HH-mm-ss')
 
-// run.dir is passed by run_benchmarks.sh (e.g. "spark-c183-26-03-2026_14-03-51").
-// Falls back to a fresh hostname-timestamp if gradle jmh is run directly.
-def runDir = project.hasProperty('run.dir')
-    ? project.property('run.dir')
-    : "${hostname}-${timestamp}"
-
 jmh {
     fork = isQuick ? 1 : 2
     warmupIterations = isQuick ? 1 : 5
@@ -42,5 +36,5 @@ jmh {
     includes = [isQuick ? 'benchmarks.QuickBenchmark' : 'benchmarks.HashMapBenchmark']
 
     // Folder owned by shell script; filename owned by Gradle (fresh timestamp per invocation)
-    resultsFile = project.file("app/results/${runDir}/${hostname}-${timestamp}.csv")
+    resultsFile = project.file("./results/${hostname}-${timestamp}/${hostname}-${timestamp}.csv")
 }

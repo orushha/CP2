@@ -5,6 +5,7 @@ Runs a minimal subset to verify everything works on a new machine before committ
 
 ```sh
 bashgradle jmh -Pquick -Pjmh.threads=1
+jmh -Pquick -Pjmh.threads=1
 ```
 
 ## Full benchmark
@@ -14,6 +15,7 @@ Results are saved to app/results/jmh-<timestamp>.csv.
 
 ```sh
 bashgradle jmh -Pjmh.threads=1   # change thread count as needed
+
 ```
 
 ## Automated full run (all thread counts)

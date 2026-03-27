@@ -23,11 +23,7 @@ TIMESTAMP=$(date '+%d-%m-%Y_%H-%M-%S')
 CORES=$(nproc)
 echo "# Detected $CORES cores"
 
-if [ "$1" == "--quick" ]; then
-    BENCHMARK="benchmarks.QuickBenchmark"
-    THREAD_COUNTS=(1 2 4)
-    echo "# Mode: quick smoke test"
-elif [ "$CORES" -le 4 ]; then
+if [ "$CORES" -le 4 ]; then
     THREAD_COUNTS=(1 2 4 8)
     echo "# Mode: full benchmark (RPi5 profile)"
 elif [ "$CORES" -le 48 ]; then
@@ -39,28 +35,6 @@ else
 fi
 
 GRADLE="gradle --offline"
-
-# Session folder — passed into Gradle as run.dir; Gradle owns the full output path
-RUN_DIR="$(hostname)-${TIMESTAMP}"
-mkdir -p "app/results/$RUN_DIR"
-
-# Log system info (full runs only)
-if [ "$1" != "--quick" ]; then
-    SYSINFO_FILE="app/results/$RUN_DIR/sysinfo.txt"
-    echo "Date: $TIMESTAMP" > "$SYSINFO_FILE"
-    echo "Hostname: $(hostname)" >> "$SYSINFO_FILE"
-    echo "Cores: $CORES" >> "$SYSINFO_FILE"
-    echo "OS: $(uname -a)" >> "$SYSINFO_FILE"
-    echo "Java: $(java -version 2>&1 | head -1)" >> "$SYSINFO_FILE"
-    echo "# System info saved to $SYSINFO_FILE"
-fi
-
-# Smoke test first
-echo ""
-echo "# Running smoke test before full benchmark..."
-$GRADLE jmh -Pquick -Pjmh.threads=1
-echo "# Smoke test passed! Starting full benchmark..."
-echo ""
 
 # Run benchmarks
 for THREADS in "${THREAD_COUNTS[@]}"; do
