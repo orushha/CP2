@@ -1,0 +1,5 @@
+Date: 2026-03-22_06-20-54
+Hostname: raspberrypi
+Cores: 4
+OS: Linux raspberrypi 6.12.47+rpt-rpi-2712 #1 SMP PREEMPT Debian 1:6.12.47-1+rpt1 (2025-09-16) aarch64 GNU/Linux
+Java: openjdk version "21.0.10" 2026-01-20
