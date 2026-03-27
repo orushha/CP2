@@ -2,6 +2,7 @@ plugins {
     id 'java'
     id 'me.champeau.jmh' version '0.7.2'
 }
+
 java {
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
@@ -9,17 +10,29 @@ java {
         languageVersion = JavaLanguageVersion.of(21)
     }
 }
+
 repositories {
     maven { url uri('../local-plugin-repo') }
     mavenCentral()
 }
+
 dependencies {
     implementation 'org.openjdk.jmh:jmh-core:1.37'
     annotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
     jmh 'org.apache.commons:commons-math3:3.6.1'
     testImplementation 'junit:junit:4.13.2'
 }
+
 def isQuick = project.hasProperty('quick')
+def hostname = InetAddress.localHost.hostName
+def timestamp = new Date().format('yyyy-dd-MM_HH-mm-ss')
+
+// run.dir is passed by run_benchmarks.sh (e.g. "spark-c183-26-03-2026_14-03-51").
+// Falls back to a fresh hostname-timestamp if gradle jmh is run directly.
+def runDir = project.hasProperty('run.dir')
+    ? project.property('run.dir')
+    : "${hostname}-${timestamp}"
+
 jmh {
     fork = isQuick ? 1 : 2
     warmupIterations = isQuick ? 1 : 5
@@ -27,9 +40,7 @@ jmh {
     timeOnIteration = '1s'
     resultFormat = 'CSV'
     includes = [isQuick ? 'benchmarks.QuickBenchmark' : 'benchmarks.HashMapBenchmark']
-    if (isQuick) {
-        resultsFile = project.file("${project.buildDir}/quicktest-discard.csv")
-    } else {
-        resultsFile = project.file("results/jmh-${new Date().format('yyyy-dd-MM_HH-mm-ss')}.csv")
-    }
+
+    // Folder owned by shell script; filename owned by Gradle (fresh timestamp per invocation)
+    resultsFile = project.file("app/results/${runDir}/${hostname}-${timestamp}.csv")
 }

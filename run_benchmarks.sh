@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run JMH benchmarks for all thread counts appropriate to this machine.
-# Saves each run to a timestamped CSV in app/results/.
+# Saves each run to a timestamped CSV in app/results/<hostname>/.
 # Usage:
 #   ./run_benchmarks.sh                 # full benchmark
 #   ./run_benchmarks.sh --quick         # quick smoke test
@@ -8,7 +8,6 @@
 #   TO RUN OFFLINE:
 #   gradle jmh -Pquick -Pjmh.threads=1  # first time, needs internet
 #   ./run_benchmarks.sh                 # all subsequent runs, fully offline
-
 set -e  # exit on any error
 
 # If gradle isn't on PATH, re-launch inside nix dev shell automatically
@@ -18,7 +17,6 @@ if ! command -v gradle &> /dev/null; then
 fi
 
 BENCHMARK="benchmarks.HashMapBenchmark"
-RESULTS_DIR="app/results"
 TIMESTAMP=$(date '+%d-%m-%Y_%H-%M-%S')
 
 # Detect core count and pick thread counts accordingly
@@ -30,26 +28,25 @@ if [ "$1" == "--quick" ]; then
     THREAD_COUNTS=(1 2 4)
     echo "# Mode: quick smoke test"
 elif [ "$CORES" -le 4 ]; then
-    # RPi5
     THREAD_COUNTS=(1 2 4 8)
     echo "# Mode: full benchmark (RPi5 profile)"
 elif [ "$CORES" -le 48 ]; then
-    # HPC node
     THREAD_COUNTS=(1 2 4 8 16 32 64)
     echo "# Mode: full benchmark (HPC profile)"
 else
-    # Fallback for unknown hardware
     THREAD_COUNTS=(1 2 4 8 16 32)
     echo "# Mode: full benchmark (generic profile, $CORES cores)"
 fi
 
 GRADLE="gradle --offline"
-RUN_DIR="app/results/${HOSTNAME}-${TIMESTAMP}"
-mkdir -p "$RUN_DIR"
+
+# Session folder — passed into Gradle as run.dir; Gradle owns the full output path
+RUN_DIR="$(hostname)-${TIMESTAMP}"
+mkdir -p "app/results/$RUN_DIR"
 
 # Log system info (full runs only)
 if [ "$1" != "--quick" ]; then
-    SYSINFO_FILE="$RUN_DIR/sysinfo.txt"
+    SYSINFO_FILE="app/results/$RUN_DIR/sysinfo.txt"
     echo "Date: $TIMESTAMP" > "$SYSINFO_FILE"
     echo "Hostname: $(hostname)" >> "$SYSINFO_FILE"
     echo "Cores: $CORES" >> "$SYSINFO_FILE"
@@ -61,26 +58,19 @@ fi
 # Smoke test first
 echo ""
 echo "# Running smoke test before full benchmark..."
-$GRADLE jmh -Pquick -Pjmh.threads=1 \
-    -Pjmh.resultFormat='CSV' \
-    -Pjmh.resultsFile="$RESULTS_DIR/quicktest-$TIMESTAMP.csv"
-
+$GRADLE jmh -Pquick -Pjmh.threads=1
 echo "# Smoke test passed! Starting full benchmark..."
 echo ""
 
 # Run benchmarks
 for THREADS in "${THREAD_COUNTS[@]}"; do
-    OUTPUT="$RUN_DIR/threads${THREADS}.csv"
-    echo ""
-    echo "# [$THREADS threads] Starting... output -> $OUTPUT"
-
+    echo "# [$THREADS threads] Starting..."
     $GRADLE jmh \
         -Pjmh.threads="$THREADS" \
-        -Pjmh.resultsFile="$OUTPUT"
-
-    echo "# [$THREADS threads] Done -> $OUTPUT"
+        -Prun.dir="$RUN_DIR"
+    echo "# [$THREADS threads] Done"
 done
 
 echo ""
-echo "# All runs complete. Results in $RESULTS_DIR:"
-ls -lh "$RUN_DIR"/*.csv
+echo "# All runs complete. Results in app/results/$RUN_DIR:"
+ls -lh "app/results/$RUN_DIR"
