@@ -1,5 +1,0 @@
-Date: 2026-03-22_21-54-12
-Hostname: spark-c183
-Cores: 20
-OS: Linux spark-c183 6.11.0-1016-nvidia #16-Ubuntu SMP PREEMPT_DYNAMIC Sun Sep 21 16:52:46 UTC 2025 aarch64 GNU/Linux
-Java: openjdk version "21.0.10" 2026-01-20
