@@ -12,29 +12,44 @@ java {
 }
 
 repositories {
+    // Always check local repo first — works fully offline
     maven { url uri('../local-plugin-repo') }
     mavenCentral()
 }
 
 dependencies {
-    implementation 'org.openjdk.jmh:jmh-core:1.37'
+    implementation     'org.openjdk.jmh:jmh-core:1.37'
     annotationProcessor 'org.openjdk.jmh:jmh-generator-annprocess:1.37'
-    jmh 'org.apache.commons:commons-math3:3.6.1'
+    jmh                'org.apache.commons:commons-math3:3.6.1'
     testImplementation 'junit:junit:4.13.2'
 }
 
-def isQuick = project.hasProperty('quick')
-def hostname = InetAddress.localHost.hostName
-def timestamp = new Date().format('yyyy-dd-MM_HH-mm-ss')
+// ── Properties injected by the shell script ──────────────────────────────────
+def isQuick   = project.hasProperty('quick')
+// Threads: passed as -Pjmh.threads=N; default 1 so plain `gradle jmh` still works
+def jmhThreads = (project.findProperty('jmh.threads') ?: '1').toInteger()
+// Run dir: passed as -Prun.dir=<hostname-timestamp>; lets all thread-count runs
+// land in the same results folder with per-thread filenames.
+def runDir    = project.findProperty('run.dir') ?: ''
 
+// Derive output path: prefer the injected runDir, fall back to a local timestamp
+def hostname  = InetAddress.localHost.hostName
+def timestamp = new Date().format('yyyy-MM-dd_HH-mm-ss')
+def effectiveDir = runDir?.trim() ? runDir : "${hostname}-${timestamp}"
+
+// ── JMH configuration ────────────────────────────────────────────────────────
 jmh {
-    fork = isQuick ? 1 : 2
-    warmupIterations = isQuick ? 1 : 5
-    iterations = isQuick ? 1 : 10
-    timeOnIteration = '1s'
-    resultFormat = 'CSV'
-    includes = [isQuick ? 'benchmarks.QuickBenchmark' : 'benchmarks.HashMapBenchmark']
+    threads             = jmhThreads          // BUG FIX: was never wired up before
+    fork                = isQuick ? 1 : 2
+    warmupIterations    = isQuick ? 1 : 5
+    iterations          = isQuick ? 1 : 10
+    timeOnIteration     = '1s'
+    resultFormat        = 'CSV'
+    includes            = [isQuick ? 'benchmarks.QuickBenchmark' : 'benchmarks.HashMapBenchmark']
 
-    // Folder owned by shell script; filename owned by Gradle (fresh timestamp per invocation)
-    resultsFile = project.file("../../results/${hostname}-${timestamp}/${hostname}-${timestamp}.csv")
+    // All thread-count runs share one directory; filename encodes thread count
+    // e.g. results/dgx01-2025-01-15_10-30-00/dgx01-2025-01-15_10-30-00-t8.csv
+    resultsFile = project.file(
+        "../../results/${effectiveDir}/${effectiveDir}-t${jmhThreads}.csv"
+    )
 }
