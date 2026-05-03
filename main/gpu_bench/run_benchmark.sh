@@ -4,7 +4,8 @@
 #SBATCH --error=gpu_benchmark_%j.err
 #SBATCH --gres=gpu:1
 #SBATCH --time=02:00:00
-#SBATCH --partition=dgx1
+#SBATCH --partition=scavenge
+#SBATCH --constraint="gpu_v100|gpu_a30|gpu_a100_40gb|gpu_a100_80gb|gpu_h100"
 
 # load modules
 module load CUDA/12.1.1
