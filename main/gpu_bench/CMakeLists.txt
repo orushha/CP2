@@ -17,7 +17,7 @@ include(${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake)
 CPMAddPackage(
   NAME cuco
   GITHUB_REPOSITORY NVIDIA/cuCollections
-  GIT_TAG dev
+  GIT_TAG v0.0.1
   OPTIONS
     "BUILD_TESTS OFF"
     "BUILD_BENCHMARKS OFF"
