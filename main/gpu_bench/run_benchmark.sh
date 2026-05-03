@@ -9,7 +9,7 @@
 
 # load modules
 module load CUDA/12.1.1
-module load CMake/3.26.3-GCCcore-12.3.0
+module load CMake/3.31.3-GCCcore-14.2.0
 
 # build
 mkdir -p build
