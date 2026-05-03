@@ -6,19 +6,20 @@
 #SBATCH --time=02:00:00
 #SBATCH --partition=dgx1
 
-# load CUDA
+# load modules
 module load CUDA/12.1.1
+module load CMake/3.26.3-GCCcore-12.3.0
 
 # build
 mkdir -p build
 cd build
 cmake ..
-make
+make -j4
 
 # run benchmark
 ./gpu_benchmark
 
-# copy results to results/gpu/
+# To copy results to results/gpu/
 cp gpu_results.csv ../../../../results/gpu/gpu_results.csv
 
 echo "done!"
