@@ -5,7 +5,15 @@ project(gpu_benchmark LANGUAGES CXX CUDA)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_STANDARD 17)
 
-# fetch cuCollections — header only, no install needed
+# downloading CPM - package manager for cmake
+file(
+    DOWNLOAD
+    https://github.com/cpm-cmake/CPM.cmake/releases/download/v0.38.3/CPM.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake
+)
+include(${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake)
+
+# fetch cuCollections from github
 CPMAddPackage(
   NAME cuco
   GITHUB_REPOSITORY NVIDIA/cuCollections
