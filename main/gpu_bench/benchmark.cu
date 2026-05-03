@@ -155,7 +155,7 @@ double run_single(const std::vector<int>& keys, int key_range,
 
 int main() {
 
-    // print GPU info
+  // print GPU name so we know which device ran the benchmark
     cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);
     std::cout << "# GPU: " << prop.name << std::endl;
