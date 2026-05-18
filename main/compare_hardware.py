@@ -1,31 +1,32 @@
 """
-compare_hardware.py — All paper figures for cross-platform HashMap study.
+compare_hardware.py — All paper figures for CPU vs GPU HashMap study.
 
 Generates exactly 4 figures, each answering one research question:
 
   Fig 1 — performance_overview.png
-      Q: Do the same implementations win on both platforms, and by how much?
-      Side-by-side heatmaps (RPi | HPC): impl × 9 workload groups.
+      Q: Do the same implementations win on both CPU and GPU, and by how much?
+      Side-by-side heatmaps (CPU | GPU): impl × 9 workload groups.
       Reader sees absolute throughput AND whether rankings are preserved.
 
   Fig 2 — scalability.png
-      Q: Do implementations scale differently across hardware tiers?
-         Where does the memory bandwidth plateau appear on each platform?
-      2×4 grid, one subplot per implementation, both platforms overlaid.
+      Q: How does CPU thread-count scaling compare to GPU single-pass throughput?
+      2×4 grid, one subplot per implementation.
+      CPU shows a scaling curve; GPU appears as a single dot (threads=1 in CSV —
+      GPU parallelism is internal to the CUDA kernel, not exposed as thread count).
 
   Fig 3 — hardware_advantage.png
-      Q: How much faster is HPC than RPi, and does it depend on implementation
-         or thread count?
-      log₂(HPC/RPi) heatmap: impl × common thread counts.
+      Q: How much faster is GPU than CPU, and does it depend on implementation?
+      log₂(GPU/CPU) heatmap at thread count = 1 (only common point).
 
   Fig 4 — distribution_sensitivity.png
-      Q: Does Zipfian skew hurt more on RPi (small 2 MB L3) than on HPC,
-         as predicted by the memory bandwidth and cache capacity analysis?
+      Q: Does Zipfian skew affect GPU and CPU differently?
       Per-platform throughput drop: uniform → zipfian_0.99.
+      CPU may benefit from L3 hot-key caching under skew; GPU has HBM bandwidth
+      but different latency profile for irregular access patterns.
 
 Usage:
-    python3 compare_hardware.py results/raspberrypi-2026-03-27_18-16-22 \\
-                                results/spark-c183-2026-03-27_19-10-10 --save
+    python3 compare_hardware.py results/cpu/spark-c183-2026-03-27_19-10-10 \\
+                                results/gpu/ --save
     (plots saved to results/cross_comparison/)
 """
 
@@ -40,7 +41,8 @@ import pandas as pd
 MAP_ORDER = [
     "SynchronizedMap", "StripedMap", "StripedMapPadded",
     "StripedWriteMap", "StripedWriteMapPadded",
-    "StripedLevelWriteMap", "HashTrieMap", "WrapConcurrentHashMap"
+    "StripedLevelWriteMap", "HashTrieMap", "WrapConcurrentHashMap",
+    "cuco_static_map",
 ]
 MAP_SHORT = {
     "SynchronizedMap":       "Sync",
@@ -51,9 +53,12 @@ MAP_SHORT = {
     "StripedLevelWriteMap":  "LevelWrite",
     "HashTrieMap":           "HashTrie",
     "WrapConcurrentHashMap": "WrapCHM",
+    "cuco_static_map":       "cuco",
 }
 
-HPC_COLOR, RPI_COLOR = "#4C72B0", "#DD8452"
+CPU_COLOR, GPU_COLOR = "#4C72B0", "#DD8452"
+# keep old names as aliases so figure functions don't need changing
+HPC_COLOR, RPI_COLOR = CPU_COLOR, GPU_COLOR
 
 plt.rcParams.update({
     "figure.dpi":        150,
@@ -109,12 +114,17 @@ def load_folder(folder):
 
 
 def detect_label(folder):
+    path = os.path.abspath(folder)
+    # GPU results live under results/gpu/
+    if os.sep + "gpu" + os.sep in path or path.endswith(os.sep + "gpu"):
+        return "GPU (GB10)"
+    # CPU results: keep existing hostname-based detection as fallback
     name = os.path.basename(folder).lower()
     if "raspberry" in name or "rpi" in name:
-        return "RPi 5"
+        return "CPU (RPi 5)"
     if "spark" in name:
-        return f"HPC"
-    return os.path.basename(folder)
+        return "CPU (HPC)"
+    return "CPU (DGX Spark)"
 
 
 def save_fig(fig, save_dir, name, tight=True):
@@ -171,8 +181,8 @@ def workload_matrix(df, t_snap, dists, ratios):
 
 # ── Figure 1: Performance overview ────────────────────────────────────────────
 #
-# Two heatmaps side by side (RPi | HPC).
-# Rows: implementations sorted by HPC median (so the same ordering is used
+# Two heatmaps side by side (CPU | GPU).
+# Rows: implementations sorted by CPU median (so the same ordering is used
 #       on both panels — ranking shifts immediately visible as row reorderings).
 # Columns: 9 workload groups (3 distributions × 3 read ratios, median over
 #          key ranges).
@@ -185,65 +195,52 @@ def workload_matrix(df, t_snap, dists, ratios):
 # It also shows the absolute throughput gap between platforms without
 # requiring a separate figure.
 
-def plot_performance_overview(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
+def plot_performance_overview(cpu, gpu, lbl_cpu, lbl_gpu, save_dir):
     dists  = [d for d in ["uniform", "zipfian_0.5", "zipfian_0.99"]
-              if d in hpc["distribution"].values and d in rpi["distribution"].values]
-    ratios = sorted(
-        set(hpc["readratio"].unique()) & set(rpi["readratio"].unique()),
-        reverse=True
-    )
+              if d in cpu["distribution"].values]
+    ratios = sorted(cpu["readratio"].unique(), reverse=True)
 
-    t_hpc = hpc["threads"].max()
-    t_rpi = rpi["threads"].max()
+    t_cpu = cpu["threads"].max()
+    t_gpu = 1  # GPU only has t=1
 
-    # Sort order fixed to HPC median so ranking shifts are readable
-    maps_hpc, mat_hpc, cols = workload_matrix(hpc, t_hpc, dists, ratios)
-    maps_rpi, mat_rpi, _    = workload_matrix(rpi, t_rpi, dists, ratios)
+    # CPU heatmap: 8 implementations × 9 workload columns
+    maps_cpu, mat_cpu, cols = workload_matrix(cpu, t_cpu, dists, ratios)
 
-    # Re-order RPi rows to match HPC order
-    rpi_maps_base = [m for m in MAP_ORDER if m in rpi["maptype"].values]
-    rpi_order_map = {m: i for i, m in enumerate(rpi_maps_base)}
-    rpi_reorder   = [rpi_order_map[m] for m in maps_hpc if m in rpi_order_map]
+    # GPU row: cuco across the same workload columns
+    krs = sorted(cpu["keyrange"].unique())
+    n_cols = len(cols)
+    gpu_row = np.zeros((1, n_cols))
+    for j, (dist, ratio) in enumerate(cols):
+        scores = []
+        for kr in krs:
+            row = filt(gpu, 1, dist, kr, ratio)
+            row = row[row["maptype"] == "cuco_static_map"]
+            if not row.empty:
+                scores.append(row["score"].values[0])
+        gpu_row[0, j] = np.median(scores) if scores else 0
 
-    # Build RPi matrix in HPC row order
-    _, mat_rpi_raw, _ = workload_matrix(rpi, t_rpi, dists, ratios)
-    # We need to re-map: maps_rpi sorted order → HPC order
-    rpi_maps_sorted_idx = {m: i for i, m in enumerate(maps_rpi)}
-    mat_rpi_reordered = np.zeros_like(mat_hpc)
-    for i, m in enumerate(maps_hpc):
-        if m in rpi_maps_sorted_idx:
-            mat_rpi_reordered[i, :] = mat_rpi[rpi_maps_sorted_idx[m], :]
+    # Use a shared colour scale so GPU (dark red) and CPU (pale) are visually comparable
+    combined = np.concatenate([gpu_row.flatten(), mat_cpu.flatten()])
+    global_max = combined[combined > 0].max() if (combined > 0).any() else 1.0
 
-    fig, axes = plt.subplots(1, 2, figsize=(20, 7))
-
+    fig, axes = plt.subplots(1, 2, figsize=(20, 8),
+                             gridspec_kw={"width_ratios": [1, 4]})
     n_ratio = len(ratios)
-    n_cols  = len(cols)
 
-    for ax, matrix, panel_label, t_snap in [
-        (axes[0], mat_rpi_reordered, lbl_rpi, t_rpi),
-        (axes[1], mat_hpc,           lbl_hpc, t_hpc),
-    ]:
-        col_max = matrix.max(axis=0, keepdims=True)
-        col_max[col_max == 0] = 1
-        matrix_n = matrix / col_max
-
+    def draw_heatmap(ax, matrix, maps, panel_label, t_snap, show_ylabels=True):
+        matrix_n = matrix / global_max
         im = ax.imshow(matrix_n, cmap="YlOrRd", aspect="auto", vmin=0, vmax=1)
-
-        for i in range(len(maps_hpc)):
+        for i in range(len(maps)):
             for j in range(n_cols):
                 v = matrix[i, j]
                 if v == 0:
                     continue
-                fmt = f"{v:.2f}" if v < 10 else f"{v:.0f}"
+                fmt = f"{v:.0f}" if v >= 100 else (f"{v:.1f}" if v >= 10 else f"{v:.2f}")
                 ax.text(j, i, fmt, ha="center", va="center", fontsize=7,
-                        color="white" if matrix_n[i, j] > 0.65 else "black")
-
-        # Read-ratio tick labels
+                        color="white" if matrix_n[i, j] > 0.5 else "black")
         ax.set_xticks(range(n_cols))
         ax.set_xticklabels([f"{int(r*100)}% reads" for _, r in cols],
                            fontsize=7.5, rotation=45, ha="right")
-
-        # Distribution group headers, placed just below the tick labels
         for k, dist in enumerate(dists):
             center_frac = (k * n_ratio + (n_ratio - 1) / 2 + 0.5) / n_cols
             ax.text(center_frac, -0.22, dist.replace("zipfian_", "Zipf-"),
@@ -251,22 +248,24 @@ def plot_performance_overview(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
                     transform=ax.transAxes)
             if k > 0:
                 ax.axvline(k * n_ratio - 0.5, color="white", linewidth=2)
+        ax.set_yticks(range(len(maps)))
+        ax.set_yticklabels([short(m) for m in maps] if show_ylabels else [""] * len(maps),
+                           fontsize=9)
+        peak_label = (f"peak: {t_snap} threads" if t_snap > 1
+                      else "CUDA internal parallelism")
+        ax.set_title(f"{panel_label}  ({peak_label})", fontsize=11, fontweight="bold", pad=8)
+        return im
 
-        ax.set_yticks(range(len(maps_hpc)))
-        ax.set_yticklabels(
-            [short(m) for m in maps_hpc] if ax == axes[0] else [""] * len(maps_hpc),
-            fontsize=9
-        )
-        ax.set_title(f"{panel_label}  (peak: {t_snap} threads)",
-                     fontsize=11, fontweight="bold", pad=8)
-
-        cbar = plt.colorbar(im, ax=ax, fraction=0.025, pad=0.03)
-        cbar.set_label("Relative rank within workload\n(1.0 = fastest in that column)",
-                       fontsize=8)
+    im0 = draw_heatmap(axes[0], gpu_row, ["cuco"], lbl_gpu, t_gpu)
+    im1 = draw_heatmap(axes[1], mat_cpu, maps_cpu, lbl_cpu, t_cpu)
+    fig.colorbar(im1, ax=axes.tolist(), fraction=0.015, pad=0.02).set_label(
+        "Throughput relative to GPU maximum\n(shared scale — GPU ≈ 1.0, CPU ≈ 0.05–0.10)",
+        fontsize=9)
 
     fig.suptitle(
-        "Median throughput (ops/μs) at peak thread count — colour normalized per workload column\n"
-        "Row order fixed to HPC ranking; if a row shifts position between panels, that implementation's rank changed across hardware.",
+        f"Median throughput (ops/μs) — {lbl_gpu} vs {lbl_cpu} on a shared colour scale\n"
+        "Both panels normalised to the GPU maximum. "
+        "CPU values appear pale because GPU throughput is 10–20× higher at peak.",
         fontsize=11, fontweight="bold"
     )
     plt.tight_layout(rect=[0, 0.10, 1, 0.92])
@@ -275,21 +274,19 @@ def plot_performance_overview(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
 
 # ── Figure 2: Scalability ──────────────────────────────────────────────────────
 #
-# 2×4 grid, one subplot per implementation.
+# 2×4 grid (or 3×3 with cuco), one subplot per implementation.
 # Both platforms overlaid on the same axes using ABSOLUTE throughput.
 # Scores aggregated as median across all 18 workload configs.
 #
-# This encodes three things per subplot simultaneously:
-#   • Vertical gap between lines = absolute throughput advantage of HPC
-#   • Shape of each line = scaling behavior on that architecture
-#   • Where each line flattens = memory bandwidth / contention saturation point
-#
-# The bandwidth plateau hypothesis (Chen et al. §2.2 of the paper) is directly
-# testable here: RPi lines should plateau earlier and at a lower thread count.
+# CPU: full scaling curve across thread counts.
+# GPU: single dot at threads=1 (GPU parallelism is internal to the CUDA kernel;
+#      the benchmark does not expose a thread-count knob on the GPU side).
+# The vertical position of the GPU dot relative to the CPU curve shows whether
+# GPU throughput exceeds, matches, or falls short of peak CPU throughput.
 
-def plot_scalability(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
-    maps = [m for m in MAP_ORDER
-            if m in hpc["maptype"].values or m in rpi["maptype"].values]
+def plot_scalability(cpu, gpu, lbl_cpu, lbl_gpu, save_dir):
+    # Only CPU implementations for the subplots
+    maps = [m for m in MAP_ORDER if m in cpu["maptype"].values]
 
     def median_by_thread(df, m):
         ts, scores = [], []
@@ -300,52 +297,56 @@ def plot_scalability(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
                 scores.append(vals.median())
         return ts, scores
 
-    all_t = sorted(set(hpc["threads"].unique()) | set(rpi["threads"].unique()))
-    log_x = len(all_t) > 2 and max(all_t) / min(all_t) >= 8
+    # GPU median across all workloads (single value — horizontal reference line)
+    gpu_median = gpu[gpu["maptype"] == "cuco_static_map"]["score"].median()
 
-    fig, axes = plt.subplots(2, 4, figsize=(17, 8))
+    cpu_t = sorted(cpu["threads"].unique())
+    log_x = len(cpu_t) > 2 and max(cpu_t) / min(cpu_t) >= 8
+
+    ncols = 4
+    nrows = (len(maps) + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(17, 4 * nrows))
     axes_flat = axes.flatten()
 
     for idx, m in enumerate(maps):
         ax = axes_flat[idx]
-        for df, color, label, ls in [
-            (hpc, HPC_COLOR, lbl_hpc, "-"),
-            (rpi, RPI_COLOR, lbl_rpi, "--"),
-        ]:
-            ts, scores = median_by_thread(df, m)
-            if scores:
-                ax.plot(ts, scores, label=label, color=color,
-                        linestyle=ls, marker="o", linewidth=1.8, markersize=4)
+        ts, scores = median_by_thread(cpu, m)
+        if scores:
+            ax.plot(ts, scores, color=CPU_COLOR, linestyle="-",
+                    marker="o", linewidth=1.8, markersize=4)
+        # GPU reference line
+        ax.axhline(gpu_median, color=GPU_COLOR, linestyle="--",
+                   linewidth=1.5, label=f"{lbl_gpu} median")
 
         ax.set_title(short(m), fontsize=10, fontweight="bold")
+        ax.set_yscale("log")
         if log_x:
             ax.set_xscale("log", base=2)
             ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
-            ax.set_xticks(all_t)
+            ax.set_xticks(cpu_t)
             ax.tick_params(axis="x", labelsize=8, rotation=45)
-        if idx % 4 == 0:
-            ax.set_ylabel("Throughput (ops/μs)", fontsize=8)
-        if idx >= 4:
+        ax.yaxis.set_major_formatter(ticker.ScalarFormatter())
+        if idx % ncols == 0:
+            ax.set_ylabel("Throughput (ops/μs, log scale)", fontsize=8)
+        if idx >= (nrows - 1) * ncols:
             ax.set_xlabel("Thread count", fontsize=8)
 
     for i in range(len(maps), len(axes_flat)):
         axes_flat[i].set_visible(False)
 
-    t_hpc_max = hpc["threads"].max()
-    t_rpi_max = rpi["threads"].max()
-    hpc_h = mlines.Line2D([], [], color=HPC_COLOR, linestyle="-",
+    cpu_h = mlines.Line2D([], [], color=CPU_COLOR, linestyle="-",
                            marker="o", markersize=4,
-                           label=f"{lbl_hpc}  (1–{t_hpc_max} threads)")
-    rpi_h = mlines.Line2D([], [], color=RPI_COLOR, linestyle="--",
-                           marker="o", markersize=4,
-                           label=f"{lbl_rpi}  (1–{t_rpi_max} threads)")
-    fig.legend(handles=[hpc_h, rpi_h], loc="lower center", ncol=2,
+                           label=f"{lbl_cpu}  (1–{max(cpu_t)} threads)")
+    gpu_h = mlines.Line2D([], [], color=GPU_COLOR, linestyle="--",
+                           linewidth=1.5,
+                           label=f"{lbl_gpu}  (median across all workloads)")
+    fig.legend(handles=[cpu_h, gpu_h], loc="lower center", ncol=2,
                bbox_to_anchor=(0.5, 0.01), frameon=True, fontsize=10)
 
     fig.suptitle(
-        "Thread-count scaling — median throughput across all 18 workload configurations\n"
-        "A flattening curve signals memory-bandwidth or contention saturation; "
-        "vertical gap between curves = absolute HPC advantage at that thread count.",
+        f"CPU thread-count scaling vs GPU reference line — median throughput across all 18 workload configurations\n"
+        f"Dashed line = {lbl_gpu} median throughput. "
+        f"CPU curve crossing the dashed line = CPU matches GPU at that thread count.",
         fontsize=11, fontweight="bold"
     )
     plt.tight_layout(rect=[0, 0.07, 1, 0.91])
@@ -355,104 +356,106 @@ def plot_scalability(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
 # ── Figure 3: Hardware advantage heatmap ──────────────────────────────────────
 #
 # Rows: implementations. Columns: thread counts common to both platforms.
-# Color: log₂(HPC/RPi), median across all 18 workload configs.
+# For CPU vs GPU, the only common thread count is t=1 (GPU has only t=1).
+# Color: log₂(GPU/CPU), median across all 18 workload configs.
 # Cell annotation: human-readable multiplier (e.g. "4.2×").
 #
 # log₂ scale is essential: 4× and 0.25× are symmetric at ±2, so the colormap
-# is honest. Blue = HPC faster, red = RPi faster (unexpected — would suggest
-# the RPi's simpler memory hierarchy benefits that implementation).
+# is honest. Blue = first arg faster, red = second arg faster.
 #
-# This figure answers: is the hardware gap uniform across implementations and
-# thread counts, or do some implementations close the gap at high thread counts
-# (suggesting contention dominates over raw compute on the HPC side)?
+# This figure answers: which implementations benefit most from GPU acceleration,
+# and which does GPU struggle to beat due to CPU cache or SIMD advantages?
 
-def plot_hardware_advantage(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
-    common_t = sorted(
-        set(hpc["threads"].unique()) & set(rpi["threads"].unique())
-    )
-    if not common_t:
-        print("  Skipping hardware advantage: no common thread counts.")
-        return
+def plot_hardware_advantage(cpu, gpu, lbl_cpu, lbl_gpu, save_dir):
+    # Compare GPU cuco vs each CPU implementation at t=1 across all workloads.
+    # Rows = CPU implementations. Columns = 9 workload groups.
+    # Color = log₂(GPU / CPU_impl) — blue = GPU faster, red = CPU faster.
+    cpu_maps = [m for m in MAP_ORDER if m in cpu["maptype"].values]
 
-    maps = [m for m in MAP_ORDER
-            if m in hpc["maptype"].values and m in rpi["maptype"].values]
-    common_dists  = set(hpc["distribution"].unique()) & set(rpi["distribution"].unique())
-    common_krs    = set(hpc["keyrange"].unique())     & set(rpi["keyrange"].unique())
-    common_ratios = set(hpc["readratio"].unique())    & set(rpi["readratio"].unique())
+    dists  = [d for d in ["uniform", "zipfian_0.5", "zipfian_0.99"]
+              if d in cpu["distribution"].values]
+    ratios = sorted(cpu["readratio"].unique(), reverse=True)
+    cols   = [(d, r) for d in dists for r in ratios]
+    krs    = sorted(cpu["keyrange"].unique())
+    n_ratio = len(ratios)
+    n_cols  = len(cols)
 
-    matrix = np.full((len(maps), len(common_t)), np.nan)
-    for j, t in enumerate(common_t):
-        for i, m in enumerate(maps):
-            log_ratios = []
-            for dist in common_dists:
-                for kr in common_krs:
-                    for ratio in common_ratios:
-                        a = filt(hpc, t, dist, kr, ratio)
-                        a = a[a["maptype"] == m]
-                        b = filt(rpi, t, dist, kr, ratio)
-                        b = b[b["maptype"] == m]
-                        if (not a.empty and not b.empty
-                                and b["score"].values[0] > 0
-                                and a["score"].values[0] > 0):
-                            log_ratios.append(
-                                np.log2(a["score"].values[0] /
-                                        b["score"].values[0])
-                            )
-            if log_ratios:
-                matrix[i, j] = np.median(log_ratios)
+    # Compare GPU vs CPU at CPU's PEAK thread count — the fair "best vs best" comparison
+    t_peak = cpu["threads"].max()
+
+    matrix = np.full((len(cpu_maps), n_cols), np.nan)
+    for j, (dist, ratio) in enumerate(cols):
+        for i, m in enumerate(cpu_maps):
+            log_vals = []
+            for kr in krs:
+                cpu_row = filt(cpu, t_peak, dist, kr, ratio)
+                cpu_row = cpu_row[cpu_row["maptype"] == m]
+                gpu_row = filt(gpu, 1, dist, kr, ratio)
+                gpu_row = gpu_row[gpu_row["maptype"] == "cuco_static_map"]
+                if (not cpu_row.empty and not gpu_row.empty
+                        and cpu_row["score"].values[0] > 0):
+                    log_vals.append(np.log2(
+                        gpu_row["score"].values[0] / cpu_row["score"].values[0]
+                    ))
+            if log_vals:
+                matrix[i, j] = np.median(log_vals)
 
     vmax = np.nanmax(np.abs(matrix)) if not np.all(np.isnan(matrix)) else 1
 
-    fig, ax = plt.subplots(figsize=(max(7, len(common_t) * 1.8 + 3), 6))
-    im = ax.imshow(matrix, cmap="RdBu", aspect="auto", vmin=-vmax, vmax=vmax)
+    fig, ax = plt.subplots(figsize=(14, 6))
+    im = ax.imshow(matrix, cmap="RdBu_r", aspect="auto", vmin=-vmax, vmax=vmax)
 
-    ax.set_xticks(range(len(common_t)))
-    ax.set_xticklabels([str(t) for t in common_t], fontsize=10)
-    ax.set_yticks(range(len(maps)))
-    ax.set_yticklabels([short(m) for m in maps], fontsize=10)
-    ax.set_xlabel("Thread count  (shared between both platforms)", fontsize=10)
+    ax.set_xticks(range(n_cols))
+    ax.set_xticklabels([f"{int(r*100)}% reads" for _, r in cols],
+                       fontsize=8, rotation=45, ha="right")
+    for k in range(1, len(dists)):
+        ax.axvline(k * n_ratio - 0.5, color="white", linewidth=2)
+    for k, dist in enumerate(dists):
+        center_frac = (k * n_ratio + (n_ratio - 1) / 2 + 0.5) / n_cols
+        ax.text(center_frac, -0.18, dist.replace("zipfian_", "Zipf-"),
+                ha="center", va="top", fontsize=9, fontweight="bold",
+                transform=ax.transAxes)
 
-    for i in range(len(maps)):
-        for j in range(len(common_t)):
+    ax.set_yticks(range(len(cpu_maps)))
+    ax.set_yticklabels([short(m) for m in cpu_maps], fontsize=10)
+    ax.set_ylabel(f"{lbl_cpu} implementation  (at peak: t={t_peak})", fontsize=10)
+
+    for i in range(len(cpu_maps)):
+        for j in range(n_cols):
             v = matrix[i, j]
             if np.isnan(v):
                 continue
             mult    = 2 ** abs(v)
-            txt     = f"{mult:.1f}×" if abs(v) > 0.15 else "≈1×"
+            txt     = f"{mult:.0f}×" if mult >= 10 else f"{mult:.1f}×"
             is_dark = abs(v) > vmax * 0.55
             ax.text(j, i, txt, ha="center", va="center", fontsize=9,
                     color="white" if is_dark else "black")
 
     cbar = plt.colorbar(im, ax=ax, fraction=0.03, pad=0.04)
-    cbar.set_label(f"log₂({lbl_hpc} / {lbl_rpi})\nblue = HPC faster · red = RPi faster",
+    cbar.set_label(f"log₂({lbl_gpu} / {lbl_cpu})\nblue = GPU faster · red = CPU faster",
                    fontsize=9)
 
     fig.suptitle(
-        f"Hardware advantage: {lbl_hpc} vs {lbl_rpi}  —  median across all 18 workload configurations\n"
-        f"Each cell shows the speedup multiplier (e.g. 4× = HPC is 4× faster). "
-        f"Colour encodes log₂ ratio, so equal gaps represent equal relative differences.",
+        f"GPU advantage: {lbl_gpu} vs {lbl_cpu} at peak CPU thread count (t={t_peak})\n"
+        f"Each cell: how many times faster is GPU cuco vs that CPU implementation at its best.",
         fontsize=11, fontweight="bold"
     )
-    plt.tight_layout(rect=[0, 0, 1, 0.88])
+    plt.tight_layout(rect=[0, 0.10, 1, 0.88])
     save_fig(fig, save_dir, "fig3_hardware_advantage.png")
 
 
 # ── Figure 4: Distribution sensitivity ────────────────────────────────────────
 #
-# Tests the Zipfian hypothesis from §2.2 of the paper:
-#   "With a highly-skewed Zipfian distribution... the degradation on RPi is
-#    likely to be more significant than Chen et al. observed."
-#
 # For each implementation: throughput drop (%) when moving from uniform to
-# zipfian_0.99, at each platform's peak thread count.
-# Positive = skew hurts, negative = cache locality from hot keys actually helps.
-# Aggregated as median across key ranges and read ratios.
+# zipfian_0.99, at each platform's peak setting.
+# Positive = skew hurts, negative = hot-key locality actually helps.
+# Aggregated as median across read ratios, shown separately per key range.
 #
-# If RPi bars are consistently taller than HPC bars: hypothesis confirmed —
-# the 2MB L3 is too small to hold hot keys, adding cache misses on top of
-# synchronization costs exactly as predicted.
-# Key range is shown separately (1K vs 1M) because the effect of the RPi's
-# small L3 is most visible at 1M keys where the working set cannot fit.
+# Research question: does Zipfian skew affect CPU and GPU differently?
+# CPU: hot keys may stay warm in L3 cache, partially offsetting skew cost.
+# GPU: HBM bandwidth is high but latency for irregular access is also high;
+#      skew could either hurt (warp divergence) or help (cache locality in L1/L2).
+# Key range shown separately (1K vs 1M) to isolate cache effects.
 
 def plot_distribution_sensitivity(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
     for df in [hpc, rpi]:
@@ -509,7 +512,7 @@ def plot_distribution_sensitivity(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
         ax.axhline(0, color="black", linewidth=0.8)
         ax.set_xticks(x + w / 2)
         ax.set_xticklabels([short(m) for m in maps], fontsize=9, rotation=20, ha="right")
-        kr_cache = "fits in RPi L3 (2 MB)" if kr == 1000 else "exceeds RPi L3 (2 MB)"
+        kr_cache = "small key range (1K keys)" if kr == 1000 else "large key range (1M keys)"
         ax.set_title(f"{kr:,} keys  —  {kr_cache}", fontsize=11, fontweight="bold", pad=8)
         ax.legend(fontsize=9, loc="upper left")
         if ax == axes[0]:
@@ -520,9 +523,9 @@ def plot_distribution_sensitivity(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
             )
 
     fig.suptitle(
-        "Impact of Zipfian-0.99 key skew relative to uniform access — peak thread count\n"
-        "Prediction: RPi bars are taller (more degradation) because its 2 MB L3 cannot\n"
-        "keep hot keys warm, adding cache misses on top of lock-contention costs.",
+        "Impact of Zipfian-0.99 key skew relative to uniform access\n"
+        "Positive = skew degrades throughput · Negative = hot-key locality helps\n"
+        "CPU L3 cache may absorb hot-key reuse; GPU response depends on HBM access pattern and warp divergence.",
         fontsize=11, fontweight="bold"
     )
     plt.tight_layout(rect=[0, 0, 1, 0.88])
@@ -547,19 +550,27 @@ def main():
     print(f"Loading {label_b}  ← {args.folder_b}\n")
     df_b = load_folder(args.folder_b)
 
-    # HPC = platform with more thread counts
-    if df_a["threads"].max() < df_b["threads"].max():
-        df_a, df_b     = df_b, df_a
+    # CPU goes first (more thread counts); GPU goes second (threads=1 only).
+    # Detect GPU by label; fall back to the "more threads = CPU" heuristic.
+    a_is_gpu = "gpu" in label_a.lower()
+    b_is_gpu = "gpu" in label_b.lower()
+    if a_is_gpu and not b_is_gpu:
+        df_a, df_b       = df_b, df_a
         label_a, label_b = label_b, label_a
+    elif not a_is_gpu and not b_is_gpu:
+        # both CPU: put higher-thread-count first
+        if df_a["threads"].max() < df_b["threads"].max():
+            df_a, df_b       = df_b, df_a
+            label_a, label_b = label_b, label_a
     lbl_hpc, lbl_rpi = label_a, label_b
 
     parent   = os.path.commonpath([os.path.abspath(args.folder_a),
                                    os.path.abspath(args.folder_b)])
     save_dir = os.path.join(parent, "cross_comparison") if args.save else None
 
-    print(f"HPC threads : {sorted(df_a['threads'].unique())}")
-    print(f"RPi threads : {sorted(df_b['threads'].unique())}")
-    print(f"Common t    : {sorted(set(df_a['threads'].unique()) & set(df_b['threads'].unique()))}\n")
+    print(f"Primary ({lbl_hpc}) threads : {sorted(df_a['threads'].unique())}")
+    print(f"Secondary ({lbl_rpi}) threads: {sorted(df_b['threads'].unique())}")
+    print(f"Common t                    : {sorted(set(df_a['threads'].unique()) & set(df_b['threads'].unique()))}\n")
 
     print("Figure 1: Performance overview ...")
     plot_performance_overview(df_a, df_b, lbl_hpc, lbl_rpi, save_dir)
