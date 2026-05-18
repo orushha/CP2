@@ -32,7 +32,6 @@ SCRIPT_DIR="$REPO_ROOT/main/gpu_bench"
 BUILD_DIR="$SCRIPT_DIR/build"
 RESULTS_DIR="$REPO_ROOT/results/gpu"
 
-rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR" "$RESULTS_DIR"
 cd "$BUILD_DIR"
 
