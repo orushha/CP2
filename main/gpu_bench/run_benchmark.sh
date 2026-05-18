@@ -29,9 +29,10 @@ export CUCO_SOURCE_DIR="$HOME/cpm_cache/cuCollections-v0.0.1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
-RESULTS_DIR="$(cd "$SCRIPT_DIR/../../results/gpu" && pwd)"
+RESULTS_DIR="$SCRIPT_DIR/../../results/gpu"
 
 mkdir -p "$BUILD_DIR" "$RESULTS_DIR"
+RESULTS_DIR="$(cd "$RESULTS_DIR" && pwd)"
 cd "$BUILD_DIR"
 
 echo "=== Configuring ==="
