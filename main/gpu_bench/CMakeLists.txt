@@ -40,6 +40,8 @@ find_package(CUDAToolkit REQUIRED)
 
 add_executable(gpu_benchmark benchmark.cu)
 
+target_compile_options(gpu_benchmark PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-extended-lambda>)
+
 target_link_libraries(gpu_benchmark
     cuco
     CUDA::cudart
