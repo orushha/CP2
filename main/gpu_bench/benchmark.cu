@@ -79,10 +79,11 @@ double run_single(const std::vector<int>& keys, int key_range,
 
     const int EMPTY_KEY = -1;
     const int EMPTY_VAL = -1;
-    const int capacity  = key_range * 2; // 2x to keep load factor low
+    const std::size_t capacity = static_cast<std::size_t>(key_range) * 2;
 
+    // current cuco API uses cuco::extent for the capacity argument
     cuco::static_map<int, int> map{
-        capacity,
+        cuco::extent<std::size_t>{capacity},
         cuco::empty_key{EMPTY_KEY},
         cuco::empty_value{EMPTY_VAL}
     };
@@ -130,7 +131,7 @@ double run_single(const std::vector<int>& keys, int key_range,
         d_put_keys.begin(), d_put_keys.end(),
         d_put_pairs.begin(),
         [] __device__ (int k) {
-            return cuco::make_pair(k, k);
+            return cuco::pair<int,int>{k, k};
         }
     );
 
