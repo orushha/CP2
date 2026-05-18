@@ -77,15 +77,18 @@ std::vector<int> generate_keys(const std::string& dist,
 double run_single(const std::vector<int>& keys, int key_range,
                   double read_ratio, int seed) {
 
-    const int EMPTY_KEY = -1;
-    const int EMPTY_VAL = -1;
+    const int EMPTY_KEY   = -1;
+    const int ERASED_KEY  = -2;
+    const int EMPTY_VAL   = -1;
     const std::size_t capacity = static_cast<std::size_t>(key_range) * 2;
 
-    // current cuco API uses cuco::extent for the capacity argument
+    // current cuco API uses cuco::extent for the capacity argument;
+    // erased_key must differ from empty_key when erase() is used
     cuco::static_map<int, int> map{
         cuco::extent<std::size_t>{capacity},
         cuco::empty_key{EMPTY_KEY},
-        cuco::empty_value{EMPTY_VAL}
+        cuco::empty_value{EMPTY_VAL},
+        cuco::erased_key{ERASED_KEY}
     };
 
     // pre-populate ~50% of key range so reads have something to find
