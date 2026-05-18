@@ -1,0 +1,19 @@
+"Benchmark","Mode","Threads","Samples","Score","Score Error (99.9%)","Unit","Param: distribution","Param: keyRange","Param: mapType","Param: readRatio"
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,4051670801.234749,158383940.071517,"ops/s",uniform,1000,cuco_static_map,0.800000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,4064851234.290825,121167138.481145,"ops/s",zipfian_0.5,1000,cuco_static_map,0.800000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,3494621234.719462,576156533.745383,"ops/s",zipfian_0.99,1000,cuco_static_map,0.800000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,2404659902.821067,319362843.567514,"ops/s",uniform,1000,cuco_static_map,0.500000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,2395643149.452496,381393359.275511,"ops/s",zipfian_0.5,1000,cuco_static_map,0.500000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,2307624855.886608,464150598.576547,"ops/s",zipfian_0.99,1000,cuco_static_map,0.500000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,2327031195.138473,80906815.323826,"ops/s",uniform,1000,cuco_static_map,0.200000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,2272743992.952863,362408058.990175,"ops/s",zipfian_0.5,1000,cuco_static_map,0.200000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,3086272632.527251,635209944.106462,"ops/s",zipfian_0.99,1000,cuco_static_map,0.200000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,2337668483.538971,78232404.284400,"ops/s",uniform,1000000,cuco_static_map,0.800000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,2473781791.373424,248529688.891706,"ops/s",zipfian_0.5,1000000,cuco_static_map,0.800000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,3371425608.064232,381901177.603841,"ops/s",zipfian_0.99,1000000,cuco_static_map,0.800000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,2107555845.060210,355324335.694061,"ops/s",uniform,1000000,cuco_static_map,0.500000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,2110643313.267848,492676093.670081,"ops/s",zipfian_0.5,1000000,cuco_static_map,0.500000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,2475603966.731601,518436031.221465,"ops/s",zipfian_0.99,1000000,cuco_static_map,0.500000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,2159734518.930670,248458418.798534,"ops/s",uniform,1000000,cuco_static_map,0.200000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,2286458057.513077,273934483.472690,"ops/s",zipfian_0.5,1000000,cuco_static_map,0.200000
+"gpu.HashMapBenchmark.mixedReadWrite","thrpt",1,20,2172231384.954129,217686854.360378,"ops/s",zipfian_0.99,1000000,cuco_static_map,0.200000

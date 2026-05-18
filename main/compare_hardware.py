@@ -117,14 +117,14 @@ def detect_label(folder):
     path = os.path.abspath(folder)
     # GPU results live under results/gpu/
     if os.sep + "gpu" + os.sep in path or path.endswith(os.sep + "gpu"):
-        return "GPU (A100)"
+        return "GPU (GB10)"
     # CPU results: keep existing hostname-based detection as fallback
     name = os.path.basename(folder).lower()
     if "raspberry" in name or "rpi" in name:
         return "CPU (RPi 5)"
     if "spark" in name:
         return "CPU (HPC)"
-    return f"CPU ({os.path.basename(folder)})"
+    return "CPU (DGX Spark)"
 
 
 def save_fig(fig, save_dir, name, tight=True):
@@ -195,65 +195,52 @@ def workload_matrix(df, t_snap, dists, ratios):
 # It also shows the absolute throughput gap between platforms without
 # requiring a separate figure.
 
-def plot_performance_overview(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
+def plot_performance_overview(cpu, gpu, lbl_cpu, lbl_gpu, save_dir):
     dists  = [d for d in ["uniform", "zipfian_0.5", "zipfian_0.99"]
-              if d in hpc["distribution"].values and d in rpi["distribution"].values]
-    ratios = sorted(
-        set(hpc["readratio"].unique()) & set(rpi["readratio"].unique()),
-        reverse=True
-    )
+              if d in cpu["distribution"].values]
+    ratios = sorted(cpu["readratio"].unique(), reverse=True)
 
-    t_hpc = hpc["threads"].max()
-    t_rpi = rpi["threads"].max()
+    t_cpu = cpu["threads"].max()
+    t_gpu = 1  # GPU only has t=1
 
-    # Sort order fixed to HPC median so ranking shifts are readable
-    maps_hpc, mat_hpc, cols = workload_matrix(hpc, t_hpc, dists, ratios)
-    maps_rpi, mat_rpi, _    = workload_matrix(rpi, t_rpi, dists, ratios)
+    # CPU heatmap: 8 implementations × 9 workload columns
+    maps_cpu, mat_cpu, cols = workload_matrix(cpu, t_cpu, dists, ratios)
 
-    # Re-order RPi rows to match HPC order
-    rpi_maps_base = [m for m in MAP_ORDER if m in rpi["maptype"].values]
-    rpi_order_map = {m: i for i, m in enumerate(rpi_maps_base)}
-    rpi_reorder   = [rpi_order_map[m] for m in maps_hpc if m in rpi_order_map]
+    # GPU row: cuco across the same workload columns
+    krs = sorted(cpu["keyrange"].unique())
+    n_cols = len(cols)
+    gpu_row = np.zeros((1, n_cols))
+    for j, (dist, ratio) in enumerate(cols):
+        scores = []
+        for kr in krs:
+            row = filt(gpu, 1, dist, kr, ratio)
+            row = row[row["maptype"] == "cuco_static_map"]
+            if not row.empty:
+                scores.append(row["score"].values[0])
+        gpu_row[0, j] = np.median(scores) if scores else 0
 
-    # Build RPi matrix in HPC row order
-    _, mat_rpi_raw, _ = workload_matrix(rpi, t_rpi, dists, ratios)
-    # We need to re-map: maps_rpi sorted order → HPC order
-    rpi_maps_sorted_idx = {m: i for i, m in enumerate(maps_rpi)}
-    mat_rpi_reordered = np.zeros_like(mat_hpc)
-    for i, m in enumerate(maps_hpc):
-        if m in rpi_maps_sorted_idx:
-            mat_rpi_reordered[i, :] = mat_rpi[rpi_maps_sorted_idx[m], :]
+    # Use a shared colour scale so GPU (dark red) and CPU (pale) are visually comparable
+    combined = np.concatenate([gpu_row.flatten(), mat_cpu.flatten()])
+    global_max = combined[combined > 0].max() if (combined > 0).any() else 1.0
 
-    fig, axes = plt.subplots(1, 2, figsize=(20, 7))
-
+    fig, axes = plt.subplots(1, 2, figsize=(20, 8),
+                             gridspec_kw={"width_ratios": [1, 4]})
     n_ratio = len(ratios)
-    n_cols  = len(cols)
 
-    for ax, matrix, panel_label, t_snap in [
-        (axes[0], mat_rpi_reordered, lbl_rpi, t_rpi),
-        (axes[1], mat_hpc,           lbl_hpc, t_hpc),
-    ]:
-        col_max = matrix.max(axis=0, keepdims=True)
-        col_max[col_max == 0] = 1
-        matrix_n = matrix / col_max
-
+    def draw_heatmap(ax, matrix, maps, panel_label, t_snap, show_ylabels=True):
+        matrix_n = matrix / global_max
         im = ax.imshow(matrix_n, cmap="YlOrRd", aspect="auto", vmin=0, vmax=1)
-
-        for i in range(len(maps_hpc)):
+        for i in range(len(maps)):
             for j in range(n_cols):
                 v = matrix[i, j]
                 if v == 0:
                     continue
-                fmt = f"{v:.2f}" if v < 10 else f"{v:.0f}"
+                fmt = f"{v:.0f}" if v >= 100 else (f"{v:.1f}" if v >= 10 else f"{v:.2f}")
                 ax.text(j, i, fmt, ha="center", va="center", fontsize=7,
-                        color="white" if matrix_n[i, j] > 0.65 else "black")
-
-        # Read-ratio tick labels
+                        color="white" if matrix_n[i, j] > 0.5 else "black")
         ax.set_xticks(range(n_cols))
         ax.set_xticklabels([f"{int(r*100)}% reads" for _, r in cols],
                            fontsize=7.5, rotation=45, ha="right")
-
-        # Distribution group headers, placed just below the tick labels
         for k, dist in enumerate(dists):
             center_frac = (k * n_ratio + (n_ratio - 1) / 2 + 0.5) / n_cols
             ax.text(center_frac, -0.22, dist.replace("zipfian_", "Zipf-"),
@@ -261,24 +248,24 @@ def plot_performance_overview(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
                     transform=ax.transAxes)
             if k > 0:
                 ax.axvline(k * n_ratio - 0.5, color="white", linewidth=2)
-
-        ax.set_yticks(range(len(maps_hpc)))
-        ax.set_yticklabels(
-            [short(m) for m in maps_hpc] if ax == axes[0] else [""] * len(maps_hpc),
-            fontsize=9
-        )
+        ax.set_yticks(range(len(maps)))
+        ax.set_yticklabels([short(m) for m in maps] if show_ylabels else [""] * len(maps),
+                           fontsize=9)
         peak_label = (f"peak: {t_snap} threads" if t_snap > 1
-                      else "massively parallel (CUDA internal)")
-    ax.set_title(f"{panel_label}  ({peak_label})",
-                     fontsize=11, fontweight="bold", pad=8)
+                      else "CUDA internal parallelism")
+        ax.set_title(f"{panel_label}  ({peak_label})", fontsize=11, fontweight="bold", pad=8)
+        return im
 
-        cbar = plt.colorbar(im, ax=ax, fraction=0.025, pad=0.03)
-        cbar.set_label("Relative rank within workload\n(1.0 = fastest in that column)",
-                       fontsize=8)
+    im0 = draw_heatmap(axes[0], gpu_row, ["cuco"], lbl_gpu, t_gpu)
+    im1 = draw_heatmap(axes[1], mat_cpu, maps_cpu, lbl_cpu, t_cpu)
+    fig.colorbar(im1, ax=axes.tolist(), fraction=0.015, pad=0.02).set_label(
+        "Throughput relative to GPU maximum\n(shared scale — GPU ≈ 1.0, CPU ≈ 0.05–0.10)",
+        fontsize=9)
 
     fig.suptitle(
-        "Median throughput (ops/μs) — colour normalized per workload column\n"
-        "Row order fixed to CPU ranking; if a row shifts position between panels, that implementation's rank changed across hardware.",
+        f"Median throughput (ops/μs) — {lbl_gpu} vs {lbl_cpu} on a shared colour scale\n"
+        "Both panels normalised to the GPU maximum. "
+        "CPU values appear pale because GPU throughput is 10–20× higher at peak.",
         fontsize=11, fontweight="bold"
     )
     plt.tight_layout(rect=[0, 0.10, 1, 0.92])
@@ -297,9 +284,9 @@ def plot_performance_overview(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
 # The vertical position of the GPU dot relative to the CPU curve shows whether
 # GPU throughput exceeds, matches, or falls short of peak CPU throughput.
 
-def plot_scalability(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
-    maps = [m for m in MAP_ORDER
-            if m in hpc["maptype"].values or m in rpi["maptype"].values]
+def plot_scalability(cpu, gpu, lbl_cpu, lbl_gpu, save_dir):
+    # Only CPU implementations for the subplots
+    maps = [m for m in MAP_ORDER if m in cpu["maptype"].values]
 
     def median_by_thread(df, m):
         ts, scores = [], []
@@ -310,54 +297,56 @@ def plot_scalability(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
                 scores.append(vals.median())
         return ts, scores
 
-    all_t = sorted(set(hpc["threads"].unique()) | set(rpi["threads"].unique()))
-    log_x = len(all_t) > 2 and max(all_t) / min(all_t) >= 8
+    # GPU median across all workloads (single value — horizontal reference line)
+    gpu_median = gpu[gpu["maptype"] == "cuco_static_map"]["score"].median()
 
-    fig, axes = plt.subplots(2, 4, figsize=(17, 8))
+    cpu_t = sorted(cpu["threads"].unique())
+    log_x = len(cpu_t) > 2 and max(cpu_t) / min(cpu_t) >= 8
+
+    ncols = 4
+    nrows = (len(maps) + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(17, 4 * nrows))
     axes_flat = axes.flatten()
 
     for idx, m in enumerate(maps):
         ax = axes_flat[idx]
-        for df, color, label, ls in [
-            (hpc, HPC_COLOR, lbl_hpc, "-"),
-            (rpi, RPI_COLOR, lbl_rpi, "--"),
-        ]:
-            ts, scores = median_by_thread(df, m)
-            if scores:
-                ax.plot(ts, scores, label=label, color=color,
-                        linestyle=ls, marker="o", linewidth=1.8, markersize=4)
+        ts, scores = median_by_thread(cpu, m)
+        if scores:
+            ax.plot(ts, scores, color=CPU_COLOR, linestyle="-",
+                    marker="o", linewidth=1.8, markersize=4)
+        # GPU reference line
+        ax.axhline(gpu_median, color=GPU_COLOR, linestyle="--",
+                   linewidth=1.5, label=f"{lbl_gpu} median")
 
         ax.set_title(short(m), fontsize=10, fontweight="bold")
+        ax.set_yscale("log")
         if log_x:
             ax.set_xscale("log", base=2)
             ax.xaxis.set_major_formatter(ticker.ScalarFormatter())
-            ax.set_xticks(all_t)
+            ax.set_xticks(cpu_t)
             ax.tick_params(axis="x", labelsize=8, rotation=45)
-        if idx % 4 == 0:
-            ax.set_ylabel("Throughput (ops/μs)", fontsize=8)
-        if idx >= 4:
+        ax.yaxis.set_major_formatter(ticker.ScalarFormatter())
+        if idx % ncols == 0:
+            ax.set_ylabel("Throughput (ops/μs, log scale)", fontsize=8)
+        if idx >= (nrows - 1) * ncols:
             ax.set_xlabel("Thread count", fontsize=8)
 
     for i in range(len(maps), len(axes_flat)):
         axes_flat[i].set_visible(False)
 
-    t_hpc_max = hpc["threads"].max()
-    t_rpi_max = rpi["threads"].max()
-    hpc_label = (f"{lbl_hpc}  (1–{t_hpc_max} threads)" if t_hpc_max > 1
-                 else f"{lbl_hpc}  (CUDA internal parallelism)")
-    rpi_label = (f"{lbl_rpi}  (1–{t_rpi_max} threads)" if t_rpi_max > 1
-                 else f"{lbl_rpi}  (CUDA internal parallelism)")
-    hpc_h = mlines.Line2D([], [], color=HPC_COLOR, linestyle="-",
-                           marker="o", markersize=4, label=hpc_label)
-    rpi_h = mlines.Line2D([], [], color=RPI_COLOR, linestyle="--",
-                           marker="o", markersize=4, label=rpi_label)
-    fig.legend(handles=[hpc_h, rpi_h], loc="lower center", ncol=2,
+    cpu_h = mlines.Line2D([], [], color=CPU_COLOR, linestyle="-",
+                           marker="o", markersize=4,
+                           label=f"{lbl_cpu}  (1–{max(cpu_t)} threads)")
+    gpu_h = mlines.Line2D([], [], color=GPU_COLOR, linestyle="--",
+                           linewidth=1.5,
+                           label=f"{lbl_gpu}  (median across all workloads)")
+    fig.legend(handles=[cpu_h, gpu_h], loc="lower center", ncol=2,
                bbox_to_anchor=(0.5, 0.01), frameon=True, fontsize=10)
 
     fig.suptitle(
-        "Thread-count scaling — median throughput across all 18 workload configurations\n"
-        "CPU: full scaling curve. GPU: single dot (parallelism is internal to CUDA kernel).\n"
-        "Vertical gap between CPU curve and GPU dot = absolute throughput difference.",
+        f"CPU thread-count scaling vs GPU reference line — median throughput across all 18 workload configurations\n"
+        f"Dashed line = {lbl_gpu} median throughput. "
+        f"CPU curve crossing the dashed line = CPU matches GPU at that thread count.",
         fontsize=11, fontweight="bold"
     )
     plt.tight_layout(rect=[0, 0.07, 1, 0.91])
@@ -377,74 +366,81 @@ def plot_scalability(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
 # This figure answers: which implementations benefit most from GPU acceleration,
 # and which does GPU struggle to beat due to CPU cache or SIMD advantages?
 
-def plot_hardware_advantage(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
-    common_t = sorted(
-        set(hpc["threads"].unique()) & set(rpi["threads"].unique())
-    )
-    if not common_t:
-        print("  Skipping hardware advantage: no common thread counts.")
-        return
+def plot_hardware_advantage(cpu, gpu, lbl_cpu, lbl_gpu, save_dir):
+    # Compare GPU cuco vs each CPU implementation at t=1 across all workloads.
+    # Rows = CPU implementations. Columns = 9 workload groups.
+    # Color = log₂(GPU / CPU_impl) — blue = GPU faster, red = CPU faster.
+    cpu_maps = [m for m in MAP_ORDER if m in cpu["maptype"].values]
 
-    maps = [m for m in MAP_ORDER
-            if m in hpc["maptype"].values and m in rpi["maptype"].values]
-    common_dists  = set(hpc["distribution"].unique()) & set(rpi["distribution"].unique())
-    common_krs    = set(hpc["keyrange"].unique())     & set(rpi["keyrange"].unique())
-    common_ratios = set(hpc["readratio"].unique())    & set(rpi["readratio"].unique())
+    dists  = [d for d in ["uniform", "zipfian_0.5", "zipfian_0.99"]
+              if d in cpu["distribution"].values]
+    ratios = sorted(cpu["readratio"].unique(), reverse=True)
+    cols   = [(d, r) for d in dists for r in ratios]
+    krs    = sorted(cpu["keyrange"].unique())
+    n_ratio = len(ratios)
+    n_cols  = len(cols)
 
-    matrix = np.full((len(maps), len(common_t)), np.nan)
-    for j, t in enumerate(common_t):
-        for i, m in enumerate(maps):
-            log_ratios = []
-            for dist in common_dists:
-                for kr in common_krs:
-                    for ratio in common_ratios:
-                        a = filt(hpc, t, dist, kr, ratio)
-                        a = a[a["maptype"] == m]
-                        b = filt(rpi, t, dist, kr, ratio)
-                        b = b[b["maptype"] == m]
-                        if (not a.empty and not b.empty
-                                and b["score"].values[0] > 0
-                                and a["score"].values[0] > 0):
-                            log_ratios.append(
-                                np.log2(a["score"].values[0] /
-                                        b["score"].values[0])
-                            )
-            if log_ratios:
-                matrix[i, j] = np.median(log_ratios)
+    # Compare GPU vs CPU at CPU's PEAK thread count — the fair "best vs best" comparison
+    t_peak = cpu["threads"].max()
+
+    matrix = np.full((len(cpu_maps), n_cols), np.nan)
+    for j, (dist, ratio) in enumerate(cols):
+        for i, m in enumerate(cpu_maps):
+            log_vals = []
+            for kr in krs:
+                cpu_row = filt(cpu, t_peak, dist, kr, ratio)
+                cpu_row = cpu_row[cpu_row["maptype"] == m]
+                gpu_row = filt(gpu, 1, dist, kr, ratio)
+                gpu_row = gpu_row[gpu_row["maptype"] == "cuco_static_map"]
+                if (not cpu_row.empty and not gpu_row.empty
+                        and cpu_row["score"].values[0] > 0):
+                    log_vals.append(np.log2(
+                        gpu_row["score"].values[0] / cpu_row["score"].values[0]
+                    ))
+            if log_vals:
+                matrix[i, j] = np.median(log_vals)
 
     vmax = np.nanmax(np.abs(matrix)) if not np.all(np.isnan(matrix)) else 1
 
-    fig, ax = plt.subplots(figsize=(max(7, len(common_t) * 1.8 + 3), 6))
-    im = ax.imshow(matrix, cmap="RdBu", aspect="auto", vmin=-vmax, vmax=vmax)
+    fig, ax = plt.subplots(figsize=(14, 6))
+    im = ax.imshow(matrix, cmap="RdBu_r", aspect="auto", vmin=-vmax, vmax=vmax)
 
-    ax.set_xticks(range(len(common_t)))
-    ax.set_xticklabels([str(t) for t in common_t], fontsize=10)
-    ax.set_yticks(range(len(maps)))
-    ax.set_yticklabels([short(m) for m in maps], fontsize=10)
-    ax.set_xlabel("Thread count  (shared between both platforms)", fontsize=10)
+    ax.set_xticks(range(n_cols))
+    ax.set_xticklabels([f"{int(r*100)}% reads" for _, r in cols],
+                       fontsize=8, rotation=45, ha="right")
+    for k in range(1, len(dists)):
+        ax.axvline(k * n_ratio - 0.5, color="white", linewidth=2)
+    for k, dist in enumerate(dists):
+        center_frac = (k * n_ratio + (n_ratio - 1) / 2 + 0.5) / n_cols
+        ax.text(center_frac, -0.18, dist.replace("zipfian_", "Zipf-"),
+                ha="center", va="top", fontsize=9, fontweight="bold",
+                transform=ax.transAxes)
 
-    for i in range(len(maps)):
-        for j in range(len(common_t)):
+    ax.set_yticks(range(len(cpu_maps)))
+    ax.set_yticklabels([short(m) for m in cpu_maps], fontsize=10)
+    ax.set_ylabel(f"{lbl_cpu} implementation  (at peak: t={t_peak})", fontsize=10)
+
+    for i in range(len(cpu_maps)):
+        for j in range(n_cols):
             v = matrix[i, j]
             if np.isnan(v):
                 continue
             mult    = 2 ** abs(v)
-            txt     = f"{mult:.1f}×" if abs(v) > 0.15 else "≈1×"
+            txt     = f"{mult:.0f}×" if mult >= 10 else f"{mult:.1f}×"
             is_dark = abs(v) > vmax * 0.55
             ax.text(j, i, txt, ha="center", va="center", fontsize=9,
                     color="white" if is_dark else "black")
 
     cbar = plt.colorbar(im, ax=ax, fraction=0.03, pad=0.04)
-    cbar.set_label(f"log₂({lbl_hpc} / {lbl_rpi})\nblue = {lbl_hpc} faster · red = {lbl_rpi} faster",
+    cbar.set_label(f"log₂({lbl_gpu} / {lbl_cpu})\nblue = GPU faster · red = CPU faster",
                    fontsize=9)
 
     fig.suptitle(
-        f"Hardware advantage: {lbl_hpc} vs {lbl_rpi}  —  median across all 18 workload configurations\n"
-        f"Each cell shows the speedup multiplier. "
-        f"Colour encodes log₂ ratio, so equal gaps represent equal relative differences.",
+        f"GPU advantage: {lbl_gpu} vs {lbl_cpu} at peak CPU thread count (t={t_peak})\n"
+        f"Each cell: how many times faster is GPU cuco vs that CPU implementation at its best.",
         fontsize=11, fontweight="bold"
     )
-    plt.tight_layout(rect=[0, 0, 1, 0.88])
+    plt.tight_layout(rect=[0, 0.10, 1, 0.88])
     save_fig(fig, save_dir, "fig3_hardware_advantage.png")
 
 
