@@ -28,7 +28,7 @@ else()
     CPMAddPackage(
       NAME cuco
       GITHUB_REPOSITORY NVIDIA/cuCollections
-      GIT_TAG main
+      GIT_TAG dev
       OPTIONS
         "BUILD_TESTS OFF"
         "BUILD_BENCHMARKS OFF"
