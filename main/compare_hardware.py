@@ -1,31 +1,32 @@
 """
-compare_hardware.py — All paper figures for cross-platform HashMap study.
+compare_hardware.py — All paper figures for CPU vs GPU HashMap study.
 
 Generates exactly 4 figures, each answering one research question:
 
   Fig 1 — performance_overview.png
-      Q: Do the same implementations win on both platforms, and by how much?
-      Side-by-side heatmaps (RPi | HPC): impl × 9 workload groups.
+      Q: Do the same implementations win on both CPU and GPU, and by how much?
+      Side-by-side heatmaps (CPU | GPU): impl × 9 workload groups.
       Reader sees absolute throughput AND whether rankings are preserved.
 
   Fig 2 — scalability.png
-      Q: Do implementations scale differently across hardware tiers?
-         Where does the memory bandwidth plateau appear on each platform?
-      2×4 grid, one subplot per implementation, both platforms overlaid.
+      Q: How does CPU thread-count scaling compare to GPU single-pass throughput?
+      2×4 grid, one subplot per implementation.
+      CPU shows a scaling curve; GPU appears as a single dot (threads=1 in CSV —
+      GPU parallelism is internal to the CUDA kernel, not exposed as thread count).
 
   Fig 3 — hardware_advantage.png
-      Q: How much faster is HPC than RPi, and does it depend on implementation
-         or thread count?
-      log₂(HPC/RPi) heatmap: impl × common thread counts.
+      Q: How much faster is GPU than CPU, and does it depend on implementation?
+      log₂(GPU/CPU) heatmap at thread count = 1 (only common point).
 
   Fig 4 — distribution_sensitivity.png
-      Q: Does Zipfian skew hurt more on RPi (small 2 MB L3) than on HPC,
-         as predicted by the memory bandwidth and cache capacity analysis?
+      Q: Does Zipfian skew affect GPU and CPU differently?
       Per-platform throughput drop: uniform → zipfian_0.99.
+      CPU may benefit from L3 hot-key caching under skew; GPU has HBM bandwidth
+      but different latency profile for irregular access patterns.
 
 Usage:
-    python3 compare_hardware.py results/raspberrypi-2026-03-27_18-16-22 \\
-                                results/spark-c183-2026-03-27_19-10-10 --save
+    python3 compare_hardware.py results/cpu/spark-c183-2026-03-27_19-10-10 \\
+                                results/gpu/ --save
     (plots saved to results/cross_comparison/)
 """
 
@@ -40,7 +41,8 @@ import pandas as pd
 MAP_ORDER = [
     "SynchronizedMap", "StripedMap", "StripedMapPadded",
     "StripedWriteMap", "StripedWriteMapPadded",
-    "StripedLevelWriteMap", "HashTrieMap", "WrapConcurrentHashMap"
+    "StripedLevelWriteMap", "HashTrieMap", "WrapConcurrentHashMap",
+    "cuco_static_map",
 ]
 MAP_SHORT = {
     "SynchronizedMap":       "Sync",
@@ -51,9 +53,12 @@ MAP_SHORT = {
     "StripedLevelWriteMap":  "LevelWrite",
     "HashTrieMap":           "HashTrie",
     "WrapConcurrentHashMap": "WrapCHM",
+    "cuco_static_map":       "cuco",
 }
 
-HPC_COLOR, RPI_COLOR = "#4C72B0", "#DD8452"
+CPU_COLOR, GPU_COLOR = "#4C72B0", "#DD8452"
+# keep old names as aliases so figure functions don't need changing
+HPC_COLOR, RPI_COLOR = CPU_COLOR, GPU_COLOR
 
 plt.rcParams.update({
     "figure.dpi":        150,
@@ -109,12 +114,17 @@ def load_folder(folder):
 
 
 def detect_label(folder):
+    path = os.path.abspath(folder)
+    # GPU results live under results/gpu/
+    if os.sep + "gpu" + os.sep in path or path.endswith(os.sep + "gpu"):
+        return "GPU (A100)"
+    # CPU results: keep existing hostname-based detection as fallback
     name = os.path.basename(folder).lower()
     if "raspberry" in name or "rpi" in name:
-        return "RPi 5"
+        return "CPU (RPi 5)"
     if "spark" in name:
-        return f"HPC"
-    return os.path.basename(folder)
+        return "CPU (HPC)"
+    return f"CPU ({os.path.basename(folder)})"
 
 
 def save_fig(fig, save_dir, name, tight=True):
@@ -171,8 +181,8 @@ def workload_matrix(df, t_snap, dists, ratios):
 
 # ── Figure 1: Performance overview ────────────────────────────────────────────
 #
-# Two heatmaps side by side (RPi | HPC).
-# Rows: implementations sorted by HPC median (so the same ordering is used
+# Two heatmaps side by side (CPU | GPU).
+# Rows: implementations sorted by CPU median (so the same ordering is used
 #       on both panels — ranking shifts immediately visible as row reorderings).
 # Columns: 9 workload groups (3 distributions × 3 read ratios, median over
 #          key ranges).
@@ -257,7 +267,9 @@ def plot_performance_overview(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
             [short(m) for m in maps_hpc] if ax == axes[0] else [""] * len(maps_hpc),
             fontsize=9
         )
-        ax.set_title(f"{panel_label}  (peak: {t_snap} threads)",
+        peak_label = (f"peak: {t_snap} threads" if t_snap > 1
+                      else "massively parallel (CUDA internal)")
+    ax.set_title(f"{panel_label}  ({peak_label})",
                      fontsize=11, fontweight="bold", pad=8)
 
         cbar = plt.colorbar(im, ax=ax, fraction=0.025, pad=0.03)
@@ -265,8 +277,8 @@ def plot_performance_overview(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
                        fontsize=8)
 
     fig.suptitle(
-        "Median throughput (ops/μs) at peak thread count — colour normalized per workload column\n"
-        "Row order fixed to HPC ranking; if a row shifts position between panels, that implementation's rank changed across hardware.",
+        "Median throughput (ops/μs) — colour normalized per workload column\n"
+        "Row order fixed to CPU ranking; if a row shifts position between panels, that implementation's rank changed across hardware.",
         fontsize=11, fontweight="bold"
     )
     plt.tight_layout(rect=[0, 0.10, 1, 0.92])
@@ -275,17 +287,15 @@ def plot_performance_overview(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
 
 # ── Figure 2: Scalability ──────────────────────────────────────────────────────
 #
-# 2×4 grid, one subplot per implementation.
+# 2×4 grid (or 3×3 with cuco), one subplot per implementation.
 # Both platforms overlaid on the same axes using ABSOLUTE throughput.
 # Scores aggregated as median across all 18 workload configs.
 #
-# This encodes three things per subplot simultaneously:
-#   • Vertical gap between lines = absolute throughput advantage of HPC
-#   • Shape of each line = scaling behavior on that architecture
-#   • Where each line flattens = memory bandwidth / contention saturation point
-#
-# The bandwidth plateau hypothesis (Chen et al. §2.2 of the paper) is directly
-# testable here: RPi lines should plateau earlier and at a lower thread count.
+# CPU: full scaling curve across thread counts.
+# GPU: single dot at threads=1 (GPU parallelism is internal to the CUDA kernel;
+#      the benchmark does not expose a thread-count knob on the GPU side).
+# The vertical position of the GPU dot relative to the CPU curve shows whether
+# GPU throughput exceeds, matches, or falls short of peak CPU throughput.
 
 def plot_scalability(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
     maps = [m for m in MAP_ORDER
@@ -333,19 +343,21 @@ def plot_scalability(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
 
     t_hpc_max = hpc["threads"].max()
     t_rpi_max = rpi["threads"].max()
+    hpc_label = (f"{lbl_hpc}  (1–{t_hpc_max} threads)" if t_hpc_max > 1
+                 else f"{lbl_hpc}  (CUDA internal parallelism)")
+    rpi_label = (f"{lbl_rpi}  (1–{t_rpi_max} threads)" if t_rpi_max > 1
+                 else f"{lbl_rpi}  (CUDA internal parallelism)")
     hpc_h = mlines.Line2D([], [], color=HPC_COLOR, linestyle="-",
-                           marker="o", markersize=4,
-                           label=f"{lbl_hpc}  (1–{t_hpc_max} threads)")
+                           marker="o", markersize=4, label=hpc_label)
     rpi_h = mlines.Line2D([], [], color=RPI_COLOR, linestyle="--",
-                           marker="o", markersize=4,
-                           label=f"{lbl_rpi}  (1–{t_rpi_max} threads)")
+                           marker="o", markersize=4, label=rpi_label)
     fig.legend(handles=[hpc_h, rpi_h], loc="lower center", ncol=2,
                bbox_to_anchor=(0.5, 0.01), frameon=True, fontsize=10)
 
     fig.suptitle(
         "Thread-count scaling — median throughput across all 18 workload configurations\n"
-        "A flattening curve signals memory-bandwidth or contention saturation; "
-        "vertical gap between curves = absolute HPC advantage at that thread count.",
+        "CPU: full scaling curve. GPU: single dot (parallelism is internal to CUDA kernel).\n"
+        "Vertical gap between CPU curve and GPU dot = absolute throughput difference.",
         fontsize=11, fontweight="bold"
     )
     plt.tight_layout(rect=[0, 0.07, 1, 0.91])
@@ -355,16 +367,15 @@ def plot_scalability(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
 # ── Figure 3: Hardware advantage heatmap ──────────────────────────────────────
 #
 # Rows: implementations. Columns: thread counts common to both platforms.
-# Color: log₂(HPC/RPi), median across all 18 workload configs.
+# For CPU vs GPU, the only common thread count is t=1 (GPU has only t=1).
+# Color: log₂(GPU/CPU), median across all 18 workload configs.
 # Cell annotation: human-readable multiplier (e.g. "4.2×").
 #
 # log₂ scale is essential: 4× and 0.25× are symmetric at ±2, so the colormap
-# is honest. Blue = HPC faster, red = RPi faster (unexpected — would suggest
-# the RPi's simpler memory hierarchy benefits that implementation).
+# is honest. Blue = first arg faster, red = second arg faster.
 #
-# This figure answers: is the hardware gap uniform across implementations and
-# thread counts, or do some implementations close the gap at high thread counts
-# (suggesting contention dominates over raw compute on the HPC side)?
+# This figure answers: which implementations benefit most from GPU acceleration,
+# and which does GPU struggle to beat due to CPU cache or SIMD advantages?
 
 def plot_hardware_advantage(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
     common_t = sorted(
@@ -424,12 +435,12 @@ def plot_hardware_advantage(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
                     color="white" if is_dark else "black")
 
     cbar = plt.colorbar(im, ax=ax, fraction=0.03, pad=0.04)
-    cbar.set_label(f"log₂({lbl_hpc} / {lbl_rpi})\nblue = HPC faster · red = RPi faster",
+    cbar.set_label(f"log₂({lbl_hpc} / {lbl_rpi})\nblue = {lbl_hpc} faster · red = {lbl_rpi} faster",
                    fontsize=9)
 
     fig.suptitle(
         f"Hardware advantage: {lbl_hpc} vs {lbl_rpi}  —  median across all 18 workload configurations\n"
-        f"Each cell shows the speedup multiplier (e.g. 4× = HPC is 4× faster). "
+        f"Each cell shows the speedup multiplier. "
         f"Colour encodes log₂ ratio, so equal gaps represent equal relative differences.",
         fontsize=11, fontweight="bold"
     )
@@ -439,20 +450,16 @@ def plot_hardware_advantage(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
 
 # ── Figure 4: Distribution sensitivity ────────────────────────────────────────
 #
-# Tests the Zipfian hypothesis from §2.2 of the paper:
-#   "With a highly-skewed Zipfian distribution... the degradation on RPi is
-#    likely to be more significant than Chen et al. observed."
-#
 # For each implementation: throughput drop (%) when moving from uniform to
-# zipfian_0.99, at each platform's peak thread count.
-# Positive = skew hurts, negative = cache locality from hot keys actually helps.
-# Aggregated as median across key ranges and read ratios.
+# zipfian_0.99, at each platform's peak setting.
+# Positive = skew hurts, negative = hot-key locality actually helps.
+# Aggregated as median across read ratios, shown separately per key range.
 #
-# If RPi bars are consistently taller than HPC bars: hypothesis confirmed —
-# the 2MB L3 is too small to hold hot keys, adding cache misses on top of
-# synchronization costs exactly as predicted.
-# Key range is shown separately (1K vs 1M) because the effect of the RPi's
-# small L3 is most visible at 1M keys where the working set cannot fit.
+# Research question: does Zipfian skew affect CPU and GPU differently?
+# CPU: hot keys may stay warm in L3 cache, partially offsetting skew cost.
+# GPU: HBM bandwidth is high but latency for irregular access is also high;
+#      skew could either hurt (warp divergence) or help (cache locality in L1/L2).
+# Key range shown separately (1K vs 1M) to isolate cache effects.
 
 def plot_distribution_sensitivity(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
     for df in [hpc, rpi]:
@@ -509,7 +516,7 @@ def plot_distribution_sensitivity(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
         ax.axhline(0, color="black", linewidth=0.8)
         ax.set_xticks(x + w / 2)
         ax.set_xticklabels([short(m) for m in maps], fontsize=9, rotation=20, ha="right")
-        kr_cache = "fits in RPi L3 (2 MB)" if kr == 1000 else "exceeds RPi L3 (2 MB)"
+        kr_cache = "small key range (1K keys)" if kr == 1000 else "large key range (1M keys)"
         ax.set_title(f"{kr:,} keys  —  {kr_cache}", fontsize=11, fontweight="bold", pad=8)
         ax.legend(fontsize=9, loc="upper left")
         if ax == axes[0]:
@@ -520,9 +527,9 @@ def plot_distribution_sensitivity(hpc, rpi, lbl_hpc, lbl_rpi, save_dir):
             )
 
     fig.suptitle(
-        "Impact of Zipfian-0.99 key skew relative to uniform access — peak thread count\n"
-        "Prediction: RPi bars are taller (more degradation) because its 2 MB L3 cannot\n"
-        "keep hot keys warm, adding cache misses on top of lock-contention costs.",
+        "Impact of Zipfian-0.99 key skew relative to uniform access\n"
+        "Positive = skew degrades throughput · Negative = hot-key locality helps\n"
+        "CPU L3 cache may absorb hot-key reuse; GPU response depends on HBM access pattern and warp divergence.",
         fontsize=11, fontweight="bold"
     )
     plt.tight_layout(rect=[0, 0, 1, 0.88])
@@ -547,19 +554,27 @@ def main():
     print(f"Loading {label_b}  ← {args.folder_b}\n")
     df_b = load_folder(args.folder_b)
 
-    # HPC = platform with more thread counts
-    if df_a["threads"].max() < df_b["threads"].max():
-        df_a, df_b     = df_b, df_a
+    # CPU goes first (more thread counts); GPU goes second (threads=1 only).
+    # Detect GPU by label; fall back to the "more threads = CPU" heuristic.
+    a_is_gpu = "gpu" in label_a.lower()
+    b_is_gpu = "gpu" in label_b.lower()
+    if a_is_gpu and not b_is_gpu:
+        df_a, df_b       = df_b, df_a
         label_a, label_b = label_b, label_a
+    elif not a_is_gpu and not b_is_gpu:
+        # both CPU: put higher-thread-count first
+        if df_a["threads"].max() < df_b["threads"].max():
+            df_a, df_b       = df_b, df_a
+            label_a, label_b = label_b, label_a
     lbl_hpc, lbl_rpi = label_a, label_b
 
     parent   = os.path.commonpath([os.path.abspath(args.folder_a),
                                    os.path.abspath(args.folder_b)])
     save_dir = os.path.join(parent, "cross_comparison") if args.save else None
 
-    print(f"HPC threads : {sorted(df_a['threads'].unique())}")
-    print(f"RPi threads : {sorted(df_b['threads'].unique())}")
-    print(f"Common t    : {sorted(set(df_a['threads'].unique()) & set(df_b['threads'].unique()))}\n")
+    print(f"Primary ({lbl_hpc}) threads : {sorted(df_a['threads'].unique())}")
+    print(f"Secondary ({lbl_rpi}) threads: {sorted(df_b['threads'].unique())}")
+    print(f"Common t                    : {sorted(set(df_a['threads'].unique()) & set(df_b['threads'].unique()))}\n")
 
     print("Figure 1: Performance overview ...")
     plot_performance_overview(df_a, df_b, lbl_hpc, lbl_rpi, save_dir)
