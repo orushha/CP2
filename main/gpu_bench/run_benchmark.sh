@@ -27,12 +27,12 @@ echo "cmake: $(cmake --version | head -1)"
 # if not pre-cloned, cmake falls back to downloading via CPM
 export CUCO_SOURCE_DIR="$HOME/cpm_cache/cuCollections-v0.0.1"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$HOME/CP2"
+SCRIPT_DIR="$REPO_ROOT/main/gpu_bench"
 BUILD_DIR="$SCRIPT_DIR/build"
-RESULTS_DIR="$SCRIPT_DIR/../../results/gpu"
+RESULTS_DIR="$REPO_ROOT/results/gpu"
 
 mkdir -p "$BUILD_DIR" "$RESULTS_DIR"
-RESULTS_DIR="$(cd "$RESULTS_DIR" && pwd)"
 cd "$BUILD_DIR"
 
 echo "=== Configuring ==="
