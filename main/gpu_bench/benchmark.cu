@@ -16,8 +16,9 @@
 #include <numeric>
 
 // same params as HashMapBenchmark.java
-const int SAMPLE_SIZE = 1000000;
-const int NUM_SAMPLES = 20;
+const int SAMPLE_SIZE  = 5000000; // 5M ops: ~1.7ms/sample at GPU speeds, reduces timing noise
+const int NUM_WARMUP   = 5;       // discarded — lets CUDA JIT and caches warm up
+const int NUM_SAMPLES  = 20;
 
 const std::vector<int>         KEY_RANGES    = {1000, 1000000};
 const std::vector<double>      READ_RATIOS   = {0.8, 0.5, 0.2};
@@ -183,6 +184,9 @@ int main() {
                 std::vector<int> keys = generate_keys(
                     dist, key_range, SAMPLE_SIZE
                 );
+
+                for (int w = 0; w < NUM_WARMUP; w++)
+                    run_single(keys, key_range, read_ratio, -(w + 1));
 
                 std::vector<double> scores;
                 scores.reserve(NUM_SAMPLES);

@@ -38,6 +38,7 @@ import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
 
+# All 8 CPU implementations + GPU — used for full heatmaps (Fig 1, Fig 4)
 MAP_ORDER = [
     "SynchronizedMap", "StripedMap", "StripedMapPadded",
     "StripedWriteMap", "StripedWriteMapPadded",
@@ -55,6 +56,12 @@ MAP_SHORT = {
     "WrapConcurrentHashMap": "WrapCHM",
     "cuco_static_map":       "cuco",
 }
+
+# Focused subset for Fig 2 (scalability) and Fig 3 (advantage):
+# WrapCHM = best CPU implementation (fair "best vs best")
+# HashTrie = lock-free, most scalable, conceptually closest to GPU parallelism
+# Sync = baseline worst case (shows full range without cluttering middle)
+FOCUS_IMPLS = ["WrapConcurrentHashMap", "HashTrieMap", "SynchronizedMap"]
 
 CPU_COLOR, GPU_COLOR = "#4C72B0", "#DD8452"
 # keep old names as aliases so figure functions don't need changing
@@ -285,8 +292,8 @@ def plot_performance_overview(cpu, gpu, lbl_cpu, lbl_gpu, save_dir):
 # GPU throughput exceeds, matches, or falls short of peak CPU throughput.
 
 def plot_scalability(cpu, gpu, lbl_cpu, lbl_gpu, save_dir):
-    # Only CPU implementations for the subplots
-    maps = [m for m in MAP_ORDER if m in cpu["maptype"].values]
+    # Focus on WrapCHM, HashTrie, Sync — tells the full range without clutter
+    maps = [m for m in FOCUS_IMPLS if m in cpu["maptype"].values]
 
     def median_by_thread(df, m):
         ts, scores = [], []
@@ -367,10 +374,13 @@ def plot_scalability(cpu, gpu, lbl_cpu, lbl_gpu, save_dir):
 # and which does GPU struggle to beat due to CPU cache or SIMD advantages?
 
 def plot_hardware_advantage(cpu, gpu, lbl_cpu, lbl_gpu, save_dir):
-    # Compare GPU cuco vs each CPU implementation at t=1 across all workloads.
+    # Compare GPU cuco vs each CPU implementation at PEAK thread count.
+    # Excludes SynchronizedMap: with a global lock at 64 threads it is essentially
+    # serial — a 300-400× GPU speedup there is uninformative.
     # Rows = CPU implementations. Columns = 9 workload groups.
     # Color = log₂(GPU / CPU_impl) — blue = GPU faster, red = CPU faster.
-    cpu_maps = [m for m in MAP_ORDER if m in cpu["maptype"].values]
+    cpu_maps = [m for m in MAP_ORDER
+                if m in cpu["maptype"].values and m != "SynchronizedMap"]
 
     dists  = [d for d in ["uniform", "zipfian_0.5", "zipfian_0.99"]
               if d in cpu["distribution"].values]
