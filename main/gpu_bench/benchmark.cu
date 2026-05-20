@@ -15,10 +15,37 @@
 #include <cmath>
 #include <numeric>
 
+// Each GPU thread independently dispatches find/insert/erase based on op_types[tid].
+// op_types: 0 = find, 1 = insert, 2 = erase.
+// This mirrors the CPU benchmark where each thread picks its own operation.
+template <typename RefType>
+__global__ void mixed_ops_kernel(RefType ref,
+                                  const int* __restrict__ keys,
+                                  const int* __restrict__ op_types,
+                                  int* __restrict__ find_results,
+                                  int n)
+{
+    int tid = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (tid >= n) return;
+    int key = keys[tid];
+    switch (op_types[tid]) {
+        case 0: {
+            auto slot = ref.find(key);
+            find_results[tid] = (slot != ref.end()) ? slot->second : -1;
+            break;
+        }
+        case 1:
+            ref.insert(cuco::pair<int,int>{key, key});
+            break;
+        default:
+            ref.erase(key);
+            break;
+    }
+}
+
 // same params as HashMapBenchmark.java
-const int SAMPLE_SIZE  = 5000000; // 5M ops: ~1.7ms/sample at GPU speeds, reduces timing noise
-const int NUM_WARMUP   = 5;       // discarded — lets CUDA JIT and caches warm up
-const int NUM_SAMPLES  = 20;
+const int SAMPLE_SIZE = 1000000;
+const int NUM_SAMPLES = 20;
 
 const std::vector<int>         KEY_RANGES    = {1000, 1000000};
 const std::vector<double>      READ_RATIOS   = {0.8, 0.5, 0.2};
@@ -104,51 +131,41 @@ double run_single(const std::vector<int>& keys, int key_range,
     thrust::device_vector<cuco::pair<int,int>> d_init(init_pairs);
     map.insert(d_init.begin(), d_init.end());
 
-    // split ops: read_ratio -> get, rest split between put and remove
+    // assign each of the SAMPLE_SIZE ops a key and type (0=find,1=insert,2=erase)
+    // so every GPU thread independently executes its own operation — same model as CPU threads
     std::mt19937 op_rng(seed);
     std::uniform_real_distribution<double> op_dist(0.0, 1.0);
 
-    std::vector<int> get_keys, put_keys, remove_keys;
-    get_keys.reserve(SAMPLE_SIZE);
-    put_keys.reserve(SAMPLE_SIZE / 4);
-    remove_keys.reserve(SAMPLE_SIZE / 4);
-
+    std::vector<int> all_keys(SAMPLE_SIZE), all_ops(SAMPLE_SIZE);
     for (int i = 0; i < SAMPLE_SIZE; i++) {
-        int key = keys[i % keys.size()];
-        double op = op_dist(op_rng);
-        if (op < read_ratio)
-            get_keys.push_back(key);
-        else if (op_rng() % 2 == 0)
-            put_keys.push_back(key);
+        all_keys[i] = keys[i % keys.size()];
+        double r = op_dist(op_rng);
+        if (r < read_ratio)
+            all_ops[i] = 0;                    // find
+        else if (op_dist(op_rng) < 0.5)
+            all_ops[i] = 1;                    // insert
         else
-            remove_keys.push_back(key);
+            all_ops[i] = 2;                    // erase
     }
 
     // move to GPU
-    thrust::device_vector<int> d_get_keys(get_keys);
-    thrust::device_vector<int> d_get_results(get_keys.size());
-    thrust::device_vector<int> d_remove_keys(remove_keys);
-
-    thrust::device_vector<int> d_put_keys(put_keys);
-    thrust::device_vector<cuco::pair<int,int>> d_put_pairs(put_keys.size());
-    thrust::transform(
-        d_put_keys.begin(), d_put_keys.end(),
-        d_put_pairs.begin(),
-        [] __device__ (int k) {
-            return cuco::pair<int,int>{k, k};
-        }
-    );
+    thrust::device_vector<int> d_keys(all_keys);
+    thrust::device_vector<int> d_ops(all_ops);
+    thrust::device_vector<int> d_find_results(SAMPLE_SIZE, -1);
 
     // sync before timing to make sure data transfer is done
     cudaDeviceSynchronize();
     auto start = std::chrono::high_resolution_clock::now();
 
-    map.find(d_get_keys.begin(), d_get_keys.end(),
-             d_get_results.begin());
-
-    map.insert(d_put_pairs.begin(), d_put_pairs.end());
-
-    map.erase(d_remove_keys.begin(), d_remove_keys.end());
+    // single kernel: each thread independently executes find/insert/erase
+    auto ref = map.ref(cuco::op::find, cuco::op::insert, cuco::op::erase);
+    constexpr int BLOCK = 256;
+    int grid = (SAMPLE_SIZE + BLOCK - 1) / BLOCK;
+    mixed_ops_kernel<<<grid, BLOCK>>>(ref,
+        thrust::raw_pointer_cast(d_keys.data()),
+        thrust::raw_pointer_cast(d_ops.data()),
+        thrust::raw_pointer_cast(d_find_results.data()),
+        SAMPLE_SIZE);
 
     // sync after so we capture actual GPU completion time
     cudaDeviceSynchronize();
@@ -184,9 +201,6 @@ int main() {
                 std::vector<int> keys = generate_keys(
                     dist, key_range, SAMPLE_SIZE
                 );
-
-                for (int w = 0; w < NUM_WARMUP; w++)
-                    run_single(keys, key_range, read_ratio, -(w + 1));
 
                 std::vector<double> scores;
                 scores.reserve(NUM_SAMPLES);
