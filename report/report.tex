@@ -24,7 +24,7 @@ Performance Across Parallelism Models}\\[0.5em]
   Vaiva Staugaityte (\texttt{vais@itu.dk})
 }
 
-\date{May 2026}
+\date{May 22, 2026}
 
 \begin{document}
 \maketitle
@@ -96,6 +96,8 @@ dependency cache. GPU benchmarks used CUDA~12.1.1, compiled with \texttt{nvcc
 -O2} targeting the specific GPU architecture. No external CUDA libraries were
 used; the GPU hash table is implemented directly in a single
 \texttt{benchmark.cu} file.
+
+The GPU benchmark (\texttt{benchmark.cu}), figure generation script (\texttt{compare\_hardware.py}), and JMH benchmark configuration were developed with assistance from Claude (Anthropic). The CPU hash table implementations follow the material of Sestoft~\cite{sestoft2025}. All AI-assisted code was reviewed and tested by the authors, and all scientific analysis and interpretation of results are the authors' own.
 
 \subsection{Implementations}
 
