@@ -1,0 +1,14 @@
+# SLURM output files
+*.out
+*.err
+slurm-*.out
+
+# Compiled GPU benchmark binary
+main/gpu_bench/gpu_benchmark
+
+# Generated figures (reproduced by compare_hardware.py)
+results/figures/
+
+# Python cache
+__pycache__/
+*.pyc
