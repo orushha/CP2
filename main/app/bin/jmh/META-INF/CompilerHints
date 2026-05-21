@@ -1,0 +1,11 @@
+dontinline,*.*_all_jmhStub
+dontinline,*.*_avgt_jmhStub
+dontinline,*.*_sample_jmhStub
+dontinline,*.*_ss_jmhStub
+dontinline,*.*_thrpt_jmhStub
+inline,benchmarks/HashMapBenchmark$ThreadState.setup
+inline,benchmarks/HashMapBenchmark.mixedReadWrite
+inline,benchmarks/HashMapBenchmark.setup
+inline,benchmarks/QuickBenchmark$ThreadState.setup
+inline,benchmarks/QuickBenchmark.mixedReadWrite
+inline,benchmarks/QuickBenchmark.setup
