@@ -1,18 +1,18 @@
 #!/bin/bash
 #SBATCH --job-name=gpu_hashtable
-#SBATCH --output=gpu_h100_%j.out
-#SBATCH --error=gpu_h100_%j.err
-#SBATCH --nodelist=cn11
-#SBATCH --gres=gpu:1
+#SBATCH --output=gpu_a100_%j.out
+#SBATCH --error=gpu_a100_%j.err
+#SBATCH --nodelist=cn13
+#SBATCH --gres=gpu:a100_40gb:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=01:00:00
 #SBATCH --partition=scavenge
-# H100 94 GiB (SM_90).  For a 3-day run switch --partition to acltr.
+# A100 40 GiB (SM_80).
 
 set -euo pipefail
 
-echo "=== GPU Hash Table Benchmark (H100) ==="
+echo "=== GPU Hash Table Benchmark (A100) ==="
 echo "Host  : $(hostname)"
 echo "Date  : $(date)"
 echo "Job   : $SLURM_JOB_ID"
@@ -29,7 +29,7 @@ RESULTS_DIR="$REPO_ROOT/results/gpu"
 mkdir -p "$RESULTS_DIR"
 
 cd "$SCRIPT_DIR"
-make SM=90
+make SM=80
 
 TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
 HOST_SHORT=$(hostname -s)

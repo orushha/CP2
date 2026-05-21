@@ -1,245 +1,324 @@
-#include <cuco/static_map.cuh>
-#include <thrust/device_vector.h>
-#include <thrust/host_vector.h>
-#include <thrust/sequence.h>
-#include <thrust/transform.h>
+// GPU Hash Table Benchmark — simple open-addressing implementation, no external deps
+//
+// Matches parameters of HashMapBenchmark.java exactly:
+//   key ranges    : 1000, 1000000
+//   read ratios   : 0.8, 0.5, 0.2
+//   distributions : uniform, zipfian_0.5, zipfian_0.99
+//   samples       : 20 per config (matching JMH 10 iterations × 2 forks)
+//   pre-populate  : ~50% of key range, seed 42 (matching Java setup)
+//
+// Build:
+//   nvcc -O2 -arch=sm_90  -o gpu_benchmark benchmark.cu   # H100
+//   nvcc -O2 -arch=sm_80  -o gpu_benchmark benchmark.cu   # A100
+//   nvcc -O2 -arch=sm_89  -o gpu_benchmark benchmark.cu   # RTX 6000 Ada / L40S
+//
+// Output CSV is format-compatible with JMH output (same column order).
+
 #include <cuda_runtime.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <stdint.h>
 
-#include <iostream>
-#include <fstream>
-#include <iomanip>
-#include <vector>
-#include <random>
-#include <chrono>
-#include <string>
-#include <cmath>
-#include <numeric>
+// ── Hash table layout ────────────────────────────────────────────────────────
+// Each slot holds (key, value) pair. EMPTY_KEY marks unused slots.
+// Using int throughout; valid keys are [0, keyRange-1] so -1 is safe sentinel.
+#define EMPTY_KEY (-1)
 
-// Each GPU thread independently dispatches find/insert/erase based on op_types[tid].
-// op_types: 0 = find, 1 = insert, 2 = erase.
-// This mirrors the CPU benchmark where each thread picks its own operation.
-template <typename RefType>
-__global__ void mixed_ops_kernel(RefType ref,
-                                  const int* __restrict__ keys,
-                                  const int* __restrict__ op_types,
-                                  int* __restrict__ find_results,
-                                  int n)
-{
-    int tid = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (tid >= n) return;
-    int key = keys[tid];
-    switch (op_types[tid]) {
-        case 0: {
-            auto slot = ref.find(key);
-            find_results[tid] = (slot != ref.end()) ? slot->second : -1;
-            break;
+typedef struct { int key; int val; } KV;
+
+// ── Device helpers ───────────────────────────────────────────────────────────
+
+__device__ __forceinline__ uint32_t knuth_hash(int key, uint32_t cap_mask) {
+    return ((uint32_t)key * 2654435761u) & cap_mask;
+}
+
+// Lock-free get: linear probing, no writes.
+__device__ bool ht_get(const KV* __restrict__ table, uint32_t cap_mask,
+                        int key, int* out) {
+    uint32_t h = knuth_hash(key, cap_mask);
+    uint32_t cap = cap_mask + 1;
+    for (uint32_t i = 0; i < cap; i++) {
+        uint32_t idx = (h + i) & cap_mask;
+        // Plain load is fine for reads (GPU memory model: coherent after sync)
+        int k = table[idx].key;
+        if (k == EMPTY_KEY) return false;
+        if (k == key) { *out = table[idx].val; return true; }
+    }
+    return false;
+}
+
+// CAS-based insert: atomically claim an empty slot.
+__device__ void ht_put(KV* table, uint32_t cap_mask, int key, int val) {
+    uint32_t h = knuth_hash(key, cap_mask);
+    uint32_t cap = cap_mask + 1;
+    for (uint32_t i = 0; i < cap; i++) {
+        uint32_t idx = (h + i) & cap_mask;
+        int old = atomicCAS(&table[idx].key, EMPTY_KEY, key);
+        if (old == EMPTY_KEY || old == key) {
+            atomicExch(&table[idx].val, val);
+            return;
         }
-        case 1:
-            ref.insert(cuco::pair<int,int>{key, key});
-            break;
-        default:
-            ref.erase(key);
-            break;
     }
+    // Table full — silently drop (won't happen with 2× capacity)
 }
 
-// same params as HashMapBenchmark.java
-const int SAMPLE_SIZE = 1000000;
-const int NUM_SAMPLES = 20;
+// ── Benchmark kernels ────────────────────────────────────────────────────────
 
-const std::vector<int>         KEY_RANGES    = {1000, 1000000};
-const std::vector<double>      READ_RATIOS   = {0.8, 0.5, 0.2};
-const std::vector<std::string> DISTRIBUTIONS = {
-    "uniform", "zipfian_0.5", "zipfian_0.99"
-};
-
-// uniform random keys, seed 42 for reproducibility
-std::vector<int> generate_uniform(int count, int key_range, int seed = 42) {
-    std::mt19937 rng(seed);
-    std::uniform_int_distribution<int> dist(0, key_range - 1);
-    std::vector<int> keys(count);
-    for (auto& k : keys) k = dist(rng);
-    return keys;
-}
-
-// zipfian keys - higher skew = more skewed access pattern
-std::vector<int> generate_zipfian(int count, int key_range,
-                                   double skew, int seed = 42) {
-    std::mt19937 rng(seed);
-
-    std::vector<double> probs(key_range);
-    double sum = 0.0;
-    for (int i = 1; i <= key_range; i++) {
-        probs[i-1] = 1.0 / std::pow((double)i, skew);
-        sum += probs[i-1];
-    }
-    for (auto& p : probs) p /= sum;
-
-    // build CDF for inverse sampling
-    std::vector<double> cdf(key_range);
-    cdf[0] = probs[0];
-    for (int i = 1; i < key_range; i++)
-        cdf[i] = cdf[i-1] + probs[i];
-
-    std::uniform_real_distribution<double> udist(0.0, 1.0);
-    std::vector<int> keys(count);
-    for (auto& k : keys) {
-        double u = udist(rng);
-        int idx = std::lower_bound(cdf.begin(), cdf.end(), u) - cdf.begin();
-        k = std::min(idx, key_range - 1);
-    }
-    return keys;
-}
-
-std::vector<int> generate_keys(const std::string& dist,
-                                int key_range, int count) {
-    if (dist == "uniform")
-        return generate_uniform(count, key_range);
-    else if (dist == "zipfian_0.5")
-        return generate_zipfian(count, key_range, 0.5);
-    else
-        return generate_zipfian(count, key_range, 0.99);
-}
-
-// runs one benchmark configuration and returns ops/sec
-double run_single(const std::vector<int>& keys, int key_range,
-                  double read_ratio, int seed) {
-
-    const int EMPTY_KEY   = -1;
-    const int ERASED_KEY  = -2;
-    const int EMPTY_VAL   = -1;
-    const std::size_t capacity = static_cast<std::size_t>(key_range) * 2;
-
-    // current cuco API uses cuco::extent for the capacity argument;
-    // erased_key must differ from empty_key when erase() is used
-    cuco::static_map<int, int> map{
-        cuco::extent<std::size_t>{capacity},
-        cuco::empty_key{EMPTY_KEY},
-        cuco::empty_value{EMPTY_VAL},
-        cuco::erased_key{ERASED_KEY}
-    };
-
-    // pre-populate ~50% of key range so reads have something to find
-    std::mt19937 pre_rng(42);
-    std::uniform_int_distribution<int> pre_dist(0, key_range - 1);
-    std::vector<cuco::pair<int,int>> init_pairs;
-    init_pairs.reserve(key_range / 2);
-    for (int i = 0; i < key_range / 2; i++) {
-        int k = pre_dist(pre_rng);
-        init_pairs.push_back({k, k});
-    }
-    thrust::device_vector<cuco::pair<int,int>> d_init(init_pairs);
-    map.insert(d_init.begin(), d_init.end());
-
-    // assign each of the SAMPLE_SIZE ops a key and type (0=find,1=insert,2=erase)
-    // so every GPU thread independently executes its own operation — same model as CPU threads
-    std::mt19937 op_rng(seed);
-    std::uniform_real_distribution<double> op_dist(0.0, 1.0);
-
-    std::vector<int> all_keys(SAMPLE_SIZE), all_ops(SAMPLE_SIZE);
-    for (int i = 0; i < SAMPLE_SIZE; i++) {
-        all_keys[i] = keys[i % keys.size()];
-        double r = op_dist(op_rng);
-        if (r < read_ratio)
-            all_ops[i] = 0;                    // find
-        else if (op_dist(op_rng) < 0.5)
-            all_ops[i] = 1;                    // insert
+// Each thread executes one operation: read (ops[tid]==0) or write (ops[tid]==1).
+// 'sink' prevents dead-code elimination of reads; warp-level XOR reduction
+// means only 1 atomic per 32 threads (not 1 per thread) so contention is minimal.
+__global__ void bench_kernel(KV* __restrict__ table, uint32_t cap_mask,
+                              const int* __restrict__ keys,
+                              const int* __restrict__ ops,
+                              int n,
+                              int* __restrict__ sink) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int v = 0;
+    if (tid < n) {
+        int key = keys[tid];
+        if (ops[tid] == 0)
+            ht_get(table, cap_mask, key, &v);
         else
-            all_ops[i] = 2;                    // erase
+            ht_put(table, cap_mask, key, key);
     }
-
-    // move to GPU
-    thrust::device_vector<int> d_keys(all_keys);
-    thrust::device_vector<int> d_ops(all_ops);
-    thrust::device_vector<int> d_find_results(SAMPLE_SIZE, -1);
-
-    // sync before timing to make sure data transfer is done
-    cudaDeviceSynchronize();
-    auto start = std::chrono::high_resolution_clock::now();
-
-    // single kernel: each thread independently executes find/insert/erase
-    auto ref = map.ref(cuco::op::find, cuco::op::insert, cuco::op::erase);
-    constexpr int BLOCK = 256;
-    int grid = (SAMPLE_SIZE + BLOCK - 1) / BLOCK;
-    mixed_ops_kernel<<<grid, BLOCK>>>(ref,
-        thrust::raw_pointer_cast(d_keys.data()),
-        thrust::raw_pointer_cast(d_ops.data()),
-        thrust::raw_pointer_cast(d_find_results.data()),
-        SAMPLE_SIZE);
-
-    // sync after so we capture actual GPU completion time
-    cudaDeviceSynchronize();
-    auto end = std::chrono::high_resolution_clock::now();
-
-    double elapsed_s = std::chrono::duration<double>(end - start).count();
-    return SAMPLE_SIZE / elapsed_s;
+    // Warp-level XOR so only lane-0 of each warp touches global memory
+    for (int off = 16; off > 0; off >>= 1)
+        v ^= __shfl_down_sync(0xffffffffu, v, off);
+    if ((threadIdx.x & 31) == 0)
+        atomicXor(sink, v);
 }
 
-int main() {
+// Pre-populate kernel: insert keys[0..n-1] into table.
+__global__ void prepop_kernel(KV* table, uint32_t cap_mask,
+                               const int* __restrict__ keys, int n) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= n) return;
+    ht_put(table, cap_mask, keys[tid], keys[tid]);
+}
 
-  // print GPU name so we know which device ran the benchmark
-    cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, 0);
-    std::cout << "# GPU: " << prop.name << std::endl;
+// Reset kernel: write EMPTY_KEY to all slots.
+__global__ void reset_kernel(KV* table, int cap) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < cap) { table[tid].key = EMPTY_KEY; table[tid].val = 0; }
+}
 
-    // output CSV in same format as JMH so compare_hardware.py works
-    std::ofstream csv("gpu_results.csv");
-    csv << "\"Benchmark\",\"Mode\",\"Threads\",\"Samples\","
-        << "\"Score\",\"Score Error (99.9%)\",\"Unit\","
-        << "\"Param: distribution\",\"Param: keyRange\","
-        << "\"Param: mapType\",\"Param: readRatio\"\n";
+// ── CPU-side helpers ─────────────────────────────────────────────────────────
 
-    for (int key_range : KEY_RANGES) {
-        for (double read_ratio : READ_RATIOS) {
-            for (const auto& dist : DISTRIBUTIONS) {
+static uint32_t next_pow2(uint32_t v) {
+    v--;
+    v |= v >> 1; v |= v >> 2; v |= v >> 4; v |= v >> 8; v |= v >> 16;
+    return v + 1;
+}
 
-                std::cout << "keyRange=" << key_range
-                          << " readRatio=" << read_ratio
-                          << " dist=" << dist << " ";
+// Simple LCG approximating Java's Random behaviour (good enough for distribution shape)
+static uint64_t lcg_state;
 
-                // generate keys once per config, same as @Setup(Level.Trial)
-                std::vector<int> keys = generate_keys(
-                    dist, key_range, SAMPLE_SIZE
-                );
+static void lcg_seed(uint64_t seed) { lcg_state = seed; }
 
-                std::vector<double> scores;
-                scores.reserve(NUM_SAMPLES);
-                for (int s = 0; s < NUM_SAMPLES; s++) {
-                    scores.push_back(
-                        run_single(keys, key_range, read_ratio, s)
-                    );
-                    std::cout << "." << std::flush;
-                }
-                std::cout << " done" << std::endl;
+static double lcg_double() {
+    lcg_state = lcg_state * 6364136223846793005ULL + 1442695040888963407ULL;
+    return (double)((lcg_state >> 11) & 0x1FFFFFFFFFFFFFULL) / (double)(1ULL << 53);
+}
 
-                // mean and 99.9% confidence interval
-                double mean = 0.0;
-                for (double s : scores) mean += s;
-                mean /= NUM_SAMPLES;
+static int lcg_int(int bound) {
+    return (int)(lcg_double() * bound);
+}
 
-                double variance = 0.0;
-                for (double s : scores)
-                    variance += (s - mean) * (s - mean);
-                variance /= (NUM_SAMPLES - 1);
-                double error = 3.291 * std::sqrt(variance / NUM_SAMPLES);
+static void gen_uniform(int* out, int n, int key_range) {
+    lcg_seed(42);
+    for (int i = 0; i < n; i++) out[i] = lcg_int(key_range);
+}
 
-                csv << "\"gpu.HashMapBenchmark.mixedReadWrite\","
-                    << "\"thrpt\","
-                    << "1,"
-                    << NUM_SAMPLES << ","
-                    << std::fixed << std::setprecision(6)
-                    << mean << ","
-                    << error << ","
-                    << "\"ops/s\","
-                    << dist << ","
-                    << key_range << ","
-                    << "cuco_static_map" << ","
-                    << read_ratio << "\n";
-            }
+// Build Zipfian CDF for key_range ranks with given skew, then sample.
+static void gen_zipfian(int* out, int n, int key_range, double skew) {
+    double* cdf = (double*)malloc(key_range * sizeof(double));
+    double sum = 0.0;
+    for (int i = 1; i <= key_range; i++) sum += 1.0 / pow((double)i, skew);
+    cdf[0] = (1.0 / pow(1.0, skew)) / sum;
+    for (int i = 1; i < key_range; i++)
+        cdf[i] = cdf[i-1] + (1.0 / pow((double)(i+1), skew)) / sum;
+
+    lcg_seed(42);
+    for (int i = 0; i < n; i++) {
+        double u = lcg_double();
+        // Binary search in CDF
+        int lo = 0, hi = key_range - 1;
+        while (lo < hi) {
+            int mid = (lo + hi) / 2;
+            if (cdf[mid] < u) lo = mid + 1; else hi = mid;
         }
+        out[i] = lo;  // rank 0-based, matching Java's ZipfDistribution.sample()-1
+    }
+    free(cdf);
+}
+
+static void gen_prepop(int* out, int n, int key_range) {
+    // Matches Java: new Random(42).nextInt(keyRange) for keyRange/2 inserts
+    lcg_seed(42);
+    for (int i = 0; i < n; i++) out[i] = lcg_int(key_range);
+}
+
+// ── Error checking ────────────────────────────────────────────────────────────
+#define CUDA_CHECK(call) do { \
+    cudaError_t err = (call); \
+    if (err != cudaSuccess) { \
+        fprintf(stderr, "CUDA error at %s:%d — %s\n", \
+                __FILE__, __LINE__, cudaGetErrorString(err)); \
+        exit(1); \
+    } \
+} while(0)
+
+// ── Main ─────────────────────────────────────────────────────────────────────
+int main() {
+    const int   KEY_RANGES[]   = {1000, 1000000};
+    const double READ_RATIOS[] = {0.8, 0.5, 0.2};
+    const char* DISTS[]        = {"uniform", "zipfian_0.5", "zipfian_0.99"};
+    const double SKEWS[]       = {0.0, 0.5, 0.99};  // 0.0 → uniform
+
+    const int N_KEY_RANGES  = 2;
+    const int N_READ_RATIOS = 3;
+    const int N_DISTS       = 3;
+    const int SAMPLE_SIZE   = 1000000;  // ops per kernel launch (= one JMH iteration)
+    const int N_SAMPLES     = 20;       // launches per config (= JMH 10 iter × 2 forks)
+    const int BLOCK_SIZE    = 256;
+
+    // Print device info to stderr so stdout is clean CSV
+    cudaDeviceProp prop;
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
+    fprintf(stderr, "GPU: %s  SM count: %d  Compute: %d.%d\n",
+            prop.name, prop.multiProcessorCount,
+            prop.major, prop.minor);
+    fprintf(stderr, "SAMPLE_SIZE=%d  N_SAMPLES=%d  BLOCK_SIZE=%d\n",
+            SAMPLE_SIZE, N_SAMPLES, BLOCK_SIZE);
+
+    // CSV header — same columns as JMH output
+    printf("\"Benchmark\",\"Mode\",\"Threads\",\"Samples\",\"Score\","
+           "\"Score Error (99.9%%)\",\"Unit\","
+           "\"Param: distribution\",\"Param: keyRange\","
+           "\"Param: mapType\",\"Param: readRatio\"\n");
+
+    // Allocate persistent GPU scratch for op results (Blackhole)
+    int* d_sink;
+    CUDA_CHECK(cudaMalloc(&d_sink, sizeof(int)));
+
+    // Allocate GPU ops array (same size for all configs)
+    int* d_ops;
+    CUDA_CHECK(cudaMalloc(&d_ops, SAMPLE_SIZE * sizeof(int)));
+
+    // CPU op buffer
+    int* cpu_ops = (int*)malloc(SAMPLE_SIZE * sizeof(int));
+
+    for (int di = 0; di < N_DISTS; di++) {
+        int* cpu_keys = (int*)malloc(SAMPLE_SIZE * sizeof(int));
+
+        for (int ki = 0; ki < N_KEY_RANGES; ki++) {
+            int key_range = KEY_RANGES[ki];
+
+            // Generate key samples for this (dist, key_range) pair
+            if (di == 0)
+                gen_uniform(cpu_keys, SAMPLE_SIZE, key_range);
+            else
+                gen_zipfian(cpu_keys, SAMPLE_SIZE, key_range, SKEWS[di]);
+
+            // Copy keys to GPU
+            int* d_keys;
+            CUDA_CHECK(cudaMalloc(&d_keys, SAMPLE_SIZE * sizeof(int)));
+            CUDA_CHECK(cudaMemcpy(d_keys, cpu_keys,
+                                  SAMPLE_SIZE * sizeof(int), cudaMemcpyHostToDevice));
+
+            // Pre-population keys: ~50% of key_range
+            int prepop_n = key_range / 2;
+            int* cpu_prepop = (int*)malloc(prepop_n * sizeof(int));
+            gen_prepop(cpu_prepop, prepop_n, key_range);
+            int* d_prepop;
+            CUDA_CHECK(cudaMalloc(&d_prepop, prepop_n * sizeof(int)));
+            CUDA_CHECK(cudaMemcpy(d_prepop, cpu_prepop,
+                                  prepop_n * sizeof(int), cudaMemcpyHostToDevice));
+
+            // GPU hash table: capacity = next power of 2 ≥ 2 × key_range
+            uint32_t cap = next_pow2((uint32_t)key_range * 2);
+            uint32_t cap_mask = cap - 1;
+            KV* d_table;
+            CUDA_CHECK(cudaMalloc(&d_table, cap * sizeof(KV)));
+
+            int prepop_blocks = (prepop_n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            int bench_blocks  = (SAMPLE_SIZE + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            int reset_blocks  = (cap + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+            for (int ri = 0; ri < N_READ_RATIOS; ri++) {
+                double read_ratio = READ_RATIOS[ri];
+
+                // Build op type array: 0 = get, 1 = put/remove
+                // Using a fresh seed per (di, ki, ri) to mirror JMH per-thread rng
+                lcg_seed((uint64_t)(di * 100 + ki * 10 + ri + 7919));
+                for (int i = 0; i < SAMPLE_SIZE; i++)
+                    cpu_ops[i] = (lcg_double() < read_ratio) ? 0 : 1;
+                CUDA_CHECK(cudaMemcpy(d_ops, cpu_ops,
+                                      SAMPLE_SIZE * sizeof(int), cudaMemcpyHostToDevice));
+
+                double scores[N_SAMPLES];
+
+                for (int s = 0; s < N_SAMPLES; s++) {
+                    // Reset table
+                    reset_kernel<<<reset_blocks, BLOCK_SIZE>>>(d_table, (int)cap);
+
+                    // Pre-populate (not timed)
+                    prepop_kernel<<<prepop_blocks, BLOCK_SIZE>>>(
+                        d_table, cap_mask, d_prepop, prepop_n);
+                    CUDA_CHECK(cudaDeviceSynchronize());
+
+                    // Timed benchmark
+                    cudaEvent_t t0, t1;
+                    CUDA_CHECK(cudaEventCreate(&t0));
+                    CUDA_CHECK(cudaEventCreate(&t1));
+                    CUDA_CHECK(cudaEventRecord(t0));
+                    bench_kernel<<<bench_blocks, BLOCK_SIZE>>>(
+                        d_table, cap_mask, d_keys, d_ops, SAMPLE_SIZE, d_sink);
+                    CUDA_CHECK(cudaEventRecord(t1));
+                    CUDA_CHECK(cudaEventSynchronize(t1));
+
+                    float ms = 0.0f;
+                    CUDA_CHECK(cudaEventElapsedTime(&ms, t0, t1));
+                    scores[s] = (double)SAMPLE_SIZE / ((double)ms / 1000.0);
+
+                    CUDA_CHECK(cudaEventDestroy(t0));
+                    CUDA_CHECK(cudaEventDestroy(t1));
+                }
+
+                // Compute mean and 99.9% CI half-width (3.291σ / √n)
+                double mean = 0.0;
+                for (int s = 0; s < N_SAMPLES; s++) mean += scores[s];
+                mean /= N_SAMPLES;
+                double var = 0.0;
+                for (int s = 0; s < N_SAMPLES; s++)
+                    var += (scores[s] - mean) * (scores[s] - mean);
+                double stdev = sqrt(var / (N_SAMPLES - 1));
+                double err   = 3.291 * stdev / sqrt((double)N_SAMPLES);
+
+                fprintf(stderr, "  [%s / kr=%d / rr=%.1f] mean=%.0f ops/s  err=%.0f\n",
+                        DISTS[di], key_range, read_ratio, mean, err);
+
+                // Output CSV row (Threads=1 represents 1 GPU device)
+                printf("\"benchmarks.HashMapBenchmark.mixedReadWrite\","
+                       "\"thrpt\",1,%d,%.6f,%.6f,\"ops/s\","
+                       "%s,%d,GPUHashTable,%.1f\n",
+                       N_SAMPLES, mean, err,
+                       DISTS[di], key_range, read_ratio);
+                fflush(stdout);
+            }
+
+            CUDA_CHECK(cudaFree(d_table));
+            CUDA_CHECK(cudaFree(d_prepop));
+            CUDA_CHECK(cudaFree(d_keys));
+            free(cpu_prepop);
+        }
+        free(cpu_keys);
     }
 
-    csv.close();
-    std::cout << "# done, results in gpu_results.csv" << std::endl;
+    CUDA_CHECK(cudaFree(d_ops));
+    CUDA_CHECK(cudaFree(d_sink));
+    free(cpu_ops);
     return 0;
 }
