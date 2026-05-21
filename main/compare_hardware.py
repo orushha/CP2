@@ -252,7 +252,7 @@ def fig_read_ratio(cpu: pd.DataFrame, gpu: pd.DataFrame, out_dir: str):
     peak_thread = cpu["threads"].max()
     read_ratios = sorted(cpu["readRatio"].unique())
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=False)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
     fig.suptitle(
         f"Throughput vs read ratio — CPU ({peak_thread} threads) vs GPU\n"
         "Geometric mean across distributions",
