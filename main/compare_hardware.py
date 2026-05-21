@@ -317,7 +317,7 @@ def fig_distribution(cpu: pd.DataFrame, gpu: pd.DataFrame, out_dir: str):
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle(
         f"Throughput change: uniform → zipfian_0.99  (peak thread: CPU={peak_thread})\n"
-        "Positive = skew hurts; Negative = skew helps",
+        "Positive = skew helps; Negative = skew hurts",
         fontsize=11
     )
 
