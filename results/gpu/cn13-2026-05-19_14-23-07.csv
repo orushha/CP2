@@ -1,0 +1,19 @@
+"Benchmark","Mode","Threads","Samples","Score","Score Error (99.9%)","Unit","Param: distribution","Param: keyRange","Param: mapType","Param: readRatio"
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,489003190.199555,41967707.683062,"ops/s",uniform,1000,GPUHashTable,0.8
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,236921109.934554,69751328.865019,"ops/s",uniform,1000,GPUHashTable,0.5
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,31535329.186328,23778969.858052,"ops/s",uniform,1000,GPUHashTable,0.2
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,807548105.056865,18532001.670074,"ops/s",uniform,1000000,GPUHashTable,0.8
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,551707077.812896,25648984.629056,"ops/s",uniform,1000000,GPUHashTable,0.5
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,283527024.209941,28375019.617740,"ops/s",uniform,1000000,GPUHashTable,0.2
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,521763564.824869,80933209.496190,"ops/s",zipfian_0.5,1000,GPUHashTable,0.8
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,255175465.614658,102325558.769926,"ops/s",zipfian_0.5,1000,GPUHashTable,0.5
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,28539771.123021,12724500.721498,"ops/s",zipfian_0.5,1000,GPUHashTable,0.2
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,844451841.022528,11077859.478107,"ops/s",zipfian_0.5,1000000,GPUHashTable,0.8
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,569002285.434594,32628888.480202,"ops/s",zipfian_0.5,1000000,GPUHashTable,0.5
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,273904937.507415,25970428.913392,"ops/s",zipfian_0.5,1000000,GPUHashTable,0.2
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,601597702.799704,60136926.738387,"ops/s",zipfian_0.99,1000,GPUHashTable,0.8
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,197816330.555363,88873181.060559,"ops/s",zipfian_0.99,1000,GPUHashTable,0.5
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,9161452.978864,6819781.950262,"ops/s",zipfian_0.99,1000,GPUHashTable,0.2
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,883649249.057412,16276370.243065,"ops/s",zipfian_0.99,1000000,GPUHashTable,0.8
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,490279457.216804,42081224.680126,"ops/s",zipfian_0.99,1000000,GPUHashTable,0.5
+"benchmarks.HashMapBenchmark.mixedReadWrite","thrpt",1,20,185163613.121057,60325405.692259,"ops/s",zipfian_0.99,1000000,GPUHashTable,0.2
