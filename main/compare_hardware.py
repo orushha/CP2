@@ -222,7 +222,7 @@ def fig_cpu_gpu_bar(cpu: pd.DataFrame, gpu: pd.DataFrame, out_dir: str):
 
     x = np.arange(len(labels))
     w = 0.35
-    fig, ax = plt.subplots(figsize=(16, 5))
+    fig, ax = plt.subplots(figsize=(20, 8))
     bars_cpu = ax.bar(x - w/2, cpu_scores, w,
                       label=f"WrapCHM (CPU, {peak_thread}t)",
                       color=IMPL_COLORS["WrapConcurrentHashMap"])
@@ -230,10 +230,12 @@ def fig_cpu_gpu_bar(cpu: pd.DataFrame, gpu: pd.DataFrame, out_dir: str):
                       label="GPU (linear probing)",
                       color=IMPL_COLORS["GPUHashTable"])
     ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=7)
-    ax.set_ylabel("Throughput (Mops/s)")
-    ax.set_title(f"Best CPU (WrapCHM @ {peak_thread} threads) vs GPU — all 18 configurations")
-    ax.legend()
+    ax.set_xticklabels(labels, fontsize=11)
+    ax.set_ylabel("Throughput (Mops/s)", fontsize=13)
+    ax.set_title(f"Best CPU (WrapCHM @ {peak_thread} threads) vs GPU — all 18 configurations",
+                 fontsize=14)
+    ax.tick_params(axis="y", labelsize=11)
+    ax.legend(fontsize=12)
     ax.grid(axis="y", alpha=0.3)
     plt.tight_layout()
     path = os.path.join(out_dir, "fig2_cpu_peak_vs_gpu.png")
